@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
-from FellPace_tools import append_to_DB, get_avtiming_api, process_data_for_DB, get_table_from_URL
+import os
+from FellPace_tools import append_to_DB, get_racetek_api, get_avtiming_api, process_data_for_DB, get_table_from_URL
 #Connect to the DB
 con = sqlite3.connect('fellpace.db')
 
@@ -9,16 +10,19 @@ con = sqlite3.connect('fellpace.db')
 # 2: csv files
 # 3: html table
 
-option = 2
+option = 3
 
 if option == 1:
     # Get from AV timing
     URL = input('What is the URL of the API?\n')
-    data = get_avtiming_api(URL)
+    if 'avtiming' in URL:
+        data = get_avtiming_api(URL)
+    elif 'racetek' in URL:
+        data = get_racetek_api(URL)
 elif option == 2:
     # Get from csv file
     file = input('What is the name of the csv?')
-    dirfile = './csv/' + file
+    dirfile = os.path.join('./csv/',file)
     data = pd.read_csv(dirfile)
 elif option == 3:
     # Get from html table
@@ -29,4 +33,6 @@ else:
 
 
 (metadata,entries) = process_data_for_DB(data)
-append_to_DB(con,entries.data,metadata)
+#Clean any null entries for time, which can't be converted to a Zscore
+valid_data = entries.data.loc[~entries.data.Time.isnull()]
+append_to_DB(con,valid_data,metadata)

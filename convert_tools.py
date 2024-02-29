@@ -11,6 +11,8 @@ def time_string_to_seconds(duration_strings : npt.NDArray) -> npt.NDArray:
             hrsminssecs = duration_string.split(':')
             if len(hrsminssecs) < 3: # Checking whether just 'mm:ss' modifying crudely
                 hrsminssecs.insert(0,'00')
+            # Removing any value after a decimal point as this can't be cast to an integer
+            hrsminssecs[2] = hrsminssecs[2].rsplit('.')[0]
             out.append(sum([a*b for a,b in zip(ftr, [int(i) for i in hrsminssecs])]))
         except:
             out.append(None)
@@ -145,10 +147,12 @@ def convert_categories(category_strings : npt.ArrayLike) -> npt.ArrayLike:
     
     for category_string in category_strings:
         
-        #CASE L in stead of F (Ladies, not Female)
-        category_string = sub('L|l','F',category_string)
+        #CASE L\W in stead of F (Ladies, not Female)
+        category_string = sub('L|l|W|w','F',category_string)
         #CASE remove whitespaces at any point in the string
         category_string = sub('\s','',category_string)
+        #CASE remove J from the string
+        category_string = sub('(?i)j','',category_string)
         
         #CASE M or F only, append SENIOR
         if match('(M|F)$',category_string):
@@ -162,8 +166,17 @@ def convert_categories(category_strings : npt.ArrayLike) -> npt.ArrayLike:
         #CASE replace SEN with SENIOR
 
         category_string = sub('(?i)senr$','SENIOR',category_string)
-        #Eradicate any U23 category should it exist, SENIOR NOW!!
-        category_string = sub('(?i)u*23','SENIOR',category_string)
+        #Eradicate any U22,U23 category should it exist, SENIOR NOW!!
+        category_string = sub('(?i)u*2[2+3]','SENIOR',category_string)
+        
+        #Add a U to the U18 category if it doesn't have one
+        category_string = sub('(?i)u*1[7,8]','U18',category_string)
+        
+        #Add a U to the U21 category if it doesn't have one
+        category_string = sub('(?i)u*21','U21',category_string)
+        
+        #There may be a loose U now if U was before a sex qualifier (UM23 for example)
+        category_string = sub('(?i)u(?![0-9])','',category_string)
         
         #CASE put anyone in intermediate categors (M45) into the main category (M40)
         #Tried to expand to include things like M45-49 of M40-44 to basically replace all with a 0

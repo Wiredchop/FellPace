@@ -26,10 +26,11 @@ class race_entries:
     
     @property
     def data(self):
+        #Only return the entries where time is not None
         return self._data
     
     @data.setter
-    def data(self,value):
+    def data(self,value: pd.DataFrame):
         self._data = value
         
     def add_column_of_data(self,column: Literal['Racer_Name','Club','Time','Position','Cat_Name']
@@ -77,9 +78,10 @@ class race_meta:
         self.race_climb = -1
         self.race_distance = -1
         self.race_name = 'invalid'
+        self.series_id = -1
     @property
-    def get_DB_entry(self) -> Tuple[str,str,int,int]:
-        return (self.race_name,self.race_date,self.race_distance,self.race_climb)
+    def get_DB_entry(self) -> Tuple[str,str,int,int,int]:
+        return (self.race_name,self.race_date,self.race_distance,self.race_climb,self.series_id)
         
     @property
     def race_name(self) -> str:
@@ -116,6 +118,13 @@ class race_meta:
     @race_climb.setter
     def race_climb(self,value: str|int|float):
         self._race_climb = int(value)
+        
+    @property
+    def series_id(self) -> int:
+        return self._series_id
+    @series_id.setter
+    def series_id(self,value: str|int|float):
+        self._series_id = int(value)
 
 def process_data_for_DB(scraped_data : pd.DataFrame) -> Tuple[race_meta,race_entries]:
     race_metadata = race_meta()
@@ -161,8 +170,18 @@ def process_data_for_DB(scraped_data : pd.DataFrame) -> Tuple[race_meta,race_ent
                 forename = scraped_data.iloc[:,forename_i]
                 surname = scraped_data.iloc[:,surname_i]
                 name = forename + ' ' + surname
-                return (name.values, [forename_i,surname_i]) 
-        
+                return (name.values, [forename_i,surname_i])
+        if col_name == 'Cat_Name':
+            print('Is gender given in a separate column?')
+            sep_gender = input('y/(n)')
+            if sep_gender == 'y':
+                print_choices()
+                gen_col = int(input('\nWhich column for gender?'))
+                cat_col = int(input('\nWhich column for category name?'))
+                gen = scraped_data.iloc[:,gen_col]
+                cat = scraped_data.iloc[:,cat_col]
+                category = gen+cat
+                return (category.values,[gen_col,cat_col])
         num_choices = print_choices()
         print(f'Which of the scraped columns should be used for: << {col_name} >>\n')
         choice = int(input('Enter column index:'))
@@ -218,7 +237,7 @@ def append_CHASE(con: sqlite3.Connection, data_to_insert: pd.DataFrame):
     # Trim to the columns needed
     
     # Add the statistics columns
-    (data_to_insert['ZScore'],data_to_insert['Percentile']) = analysis_tools.calculate_position_stats(data_to_insert['Time'].values)
+    (data_to_insert['ZScore'],data_to_insert['ZScore_log'],data_to_insert['Percentile']) = analysis_tools.calculate_position_stats(data_to_insert['Time'].values)
 
     print(f'About to insert {len(data_to_insert.index)} records')
     print(data_to_insert.head())
@@ -235,15 +254,19 @@ def append_to_DB(con: sqlite3.Connection, data_to_insert: pd.DataFrame,data_meta
     Categories = pd.read_sql_query('SELECT * FROM Categories',con)
     Racers = pd.read_sql_query('SELECT * FROM Racers',con)
     Races = pd.read_sql_query('SELECT * FROM Races',con)
+    Series = pd.read_sql_query('SELECT * FROM Race_Series',con)
     cur = con.cursor()
     
     #Ensure the race isn't not duplicated
     duplicated =  check_db_for_duplicate_races(Races,data_metadata)
     
+    #Check the race series and return the appropriate series_ID (or exit)
+    data_metadata.series_id,series_name = suggest_race_series(Series,data_metadata)
+    
     #Insert the race into the database!
     if not duplicated:
-        SQL_insert = "INSERT INTO Races (Race_Name, Race_Date, Race_Distance, Race_Climb)"\
-                    "VALUES (?,?,?,?);" 
+        SQL_insert = "INSERT INTO Races (Race_Name, Race_Date, Race_Distance, Race_Climb, Series_ID)"\
+                    "VALUES (?,?,?,?,?);" 
         tryagain = True
         while tryagain and check:
             print('Inserting Race into DB')
@@ -252,6 +275,7 @@ def append_to_DB(con: sqlite3.Connection, data_to_insert: pd.DataFrame,data_meta
             print(f'Race Date:\t{data_metadata.race_date}')
             print(f'Race Distance:\t{data_metadata.race_distance}')
             print(f'Race Climb: {data_metadata.race_climb}')
+            print(f'Series ID: {data_metadata.series_id} ({series_name})') #TODO: Series ID should be added to race metadata
             key = input('Does everything look ok? Input any key to try again')
             if not key:
                 tryagain = False                   
@@ -261,7 +285,10 @@ def append_to_DB(con: sqlite3.Connection, data_to_insert: pd.DataFrame,data_meta
             cur.execute(SQL_insert,data_metadata.get_DB_entry)
             con.commit() # Commit here otherwise funny things happen
     #RACES
-    #Get updated Races object containing only the relevant race, so we can get ID number
+    #Once we have multiple races with the same name, can't do a simple query to get race ID as
+    # multiple values will be returned.
+    # Instead you can query the cursor to find out what the number of the previous row added was
+    Race_ID = cur.lastrowid
     query = 'SELECT * FROM Races '\
             'WHERE Race_Name = ?'
     Races = pd.read_sql_query(query,con,params=(data_metadata.race_name,))
@@ -291,13 +318,13 @@ def append_to_DB(con: sqlite3.Connection, data_to_insert: pd.DataFrame,data_meta
     # Categories
     data_to_insert = pd.merge(data_to_insert,Categories,'left',['Cat_Name','Cat_Name'])
     # Races add Race_ID
-    data_to_insert['Race_ID'] = Races['Race_ID'].values[0] #Just get the first value and insert that over and over again
+    data_to_insert['Race_ID'] = Race_ID #Just get the first value and insert that over and over again
 
     data_to_insert = data_to_insert[['Race_ID','Racer_ID','Time','Cat_ID','Position']]
     # Trim to the columns needed
     
     # Add the statistics columns
-    (data_to_insert['ZScore'],data_to_insert['Percentile']) = analysis_tools.calculate_position_stats(data_to_insert['Time'].values)
+    (data_to_insert['ZScore'],data_to_insert['ZScore_log'],data_to_insert['Percentile']) = analysis_tools.calculate_position_stats(data_to_insert['Time'].values)
 
     print(f'About to insert {len(data_to_insert.index)} records')
     print(data_to_insert.head())
@@ -310,6 +337,18 @@ def append_to_DB(con: sqlite3.Connection, data_to_insert: pd.DataFrame,data_meta
     con.commit()
     con.close()  
 
+def suggest_race_series(Series: pd.DataFrame, data_metadata: race_meta) -> Tuple[int,str]:
+    # Find the closest matching race series
+    Series['distances'] = Series['Series_Name'].map(lambda i: Levenshtein.distance(i,data_metadata.race_name))
+    Series = Series.sort_values(by = 'distances', ascending=True)
+    print(f'The closest matching race series is: {Series.iloc[0]["Series_Name"]}')
+    if input('Is this the series you want to add the race to? (y/n)') == 'y':
+        print(f'Adding the race to: {Series.iloc[0]["Series_Name"]}')
+        return Series.iloc[0]['Series_ID'],Series.iloc[0]['Series_Name']
+    else:
+        print('Not currently adding more series, exiting')
+        exit()
+    
 def check_db_for_duplicate_races(Races: pd.DataFrame, data_metadata: race_meta) -> bool:
     # Find possible matches for race name
     Races['Race_Name_distances'] = Races['Race_Name'].map(lambda i:Levenshtein.distance(i,data_metadata.race_name))
@@ -346,10 +385,16 @@ def check_db_for_duplicate_racers(data_to_insert: pd.DataFrame, Racers: pd.DataF
     #Ensure no repeated entries
     Racers_new = Racers_new.drop_duplicates(subset=['Racer_Name'])
     return Racers_new
-
+def get_racetek_api(URL: str) -> pd.DataFrame:
+    response = requests.get(URL)
+    # racetek API gives a list of entries (each a single list).
+    fulljson = response.json()
+    data = pd.DataFrame(data = fulljson,
+                        columns = ['No.','First Name','Surname','Gender','Age Cat','Course','Club','Time',''],
+                        )
+    data['Position']=data.index
+    return data
 def get_avtiming_api(URL: str) -> pd.DataFrame:
-    import requests
-    import json
     api_url = URL
     response = requests.get(api_url)
     fulljson = response.json()

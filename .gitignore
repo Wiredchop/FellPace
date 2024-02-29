@@ -1,2 +1,6 @@
-./csv/*
-.\pdf\*
+csv/
+pdf/
+.vscode/
+__pycache__/
+legacy/
+fellpace.db
