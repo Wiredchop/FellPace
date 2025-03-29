@@ -1,7 +1,7 @@
 import pandas as pd
-import convert_tools
-import analysis_tools
-import FellPace_tools
+import fellpace.convert_tools as convert_tools
+import fellpace.analysis_tools as analysis_tools
+import fellpace.FellPace_tools as FellPace_tools
 import sqlite3
 #file = input('Enter the name of the HC file')
 file = 'Chase 2016.csv'

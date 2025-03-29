@@ -121,3 +121,52 @@ def convert_Chase_ZScore_logs(con: sqlite3.Connection,Zscore_logs: pd.Series, ye
     pred_logs = Chase_stats['mn'].values + Chase_stats['sd'].values * Zscore_logs
     return np.exp(pred_logs)
     
+def convert_Chase_ZScore_logs_avg(con: sqlite3.Connection,Zscore_logs: pd.Series):
+    """This does the same as the previous function but does not require a year input. When predicting
+    times, we will not have that year's HC results and so an average of all available data must be taken
+
+    Args:
+        con (sqlite3.Connection): A connection to a database -- A standard deviation function 'stddev'
+        must be included
+        Zscore_logs (pd.Series): A series of ZScores
+
+    Returns:
+        _type_: Expected times based on ZScore values
+    """
+    # Add logarithm to the sqllite connection
+
+    def ln(t):
+        return np.log(t)
+    con.create_function("ln", 1, ln)
+
+    """This function extracts raw stats from the original Chase data in order to convert back Zscore log data.
+    
+
+    Args:
+        con (sqlite3.Connection): A connection to the fellpace database. MUST HAVE sttdev ADDED!!
+        Zscore_logs (pd.Series): A series of Zscore_log values to be converted into expected times
+        year (int): We also need the year of the chase for which the times need converting
+    """
+    
+    SQL_get_log_chase_stats = '''
+        WITH Timel AS
+        (
+            SELECT *, ln(Time) Timel
+            FROM Results_Chase
+            WHERE Time IS NOT NULL
+        ),
+
+        sds AS
+        (
+            SELECT Chase_ID, stddev(Timel) AS sd, avg(Timel) AS mn
+            FROM Timel
+            GROUP BY Chase_ID
+        )
+        
+
+        SELECT  avg(R.sd) as sd, avg(R.mn) as mn FROM sds as R
+    '''
+    
+    Chase_stats = pd.read_sql(SQL_get_log_chase_stats,con)
+    pred_logs = Chase_stats['mn'].values + Chase_stats['sd'].values * Zscore_logs
+    return np.exp(pred_logs)

@@ -2,10 +2,11 @@ import pandas as pd
 import numpy as np
 import numpy.typing as npt
 from typing import Literal, Tuple, List
-import convert_tools
-import analysis_tools
+import fellpace.convert_tools as convert_tools
+import fellpace.analysis_tools as analysis_tools
+from pathlib import Path
 import requests
-import json
+import toml
 import datetime
 from datetime import datetime as dt 
 import sqlite3
@@ -126,13 +127,44 @@ class race_meta:
     def series_id(self,value: str|int|float):
         self._series_id = int(value)
 
-def process_data_for_DB(scraped_data : pd.DataFrame) -> Tuple[race_meta,race_entries]:
+def get_race_meta(filename: str = 'current_meta'):
+    filepath = Path.cwd() / filename
+    resp = ''
+    meta = {}
+    if filepath.exists():
+        print("Saved race info found, loading.\n")
+        meta = toml.load(filepath)
+        while (resp != "n") and (resp != "y"):
+            for k, v in meta.items():
+                print(f"{k}: {v}\n")
+            resp = input('Correct? (y), Change date only (c), enter manually (n)\n')
+            if resp == "c":
+                meta['race_date'] = input('What was the date of the race, in the format yyyy-mm-dd\n')
+    else:
+        resp == "n"
+    if resp == "y":
+        return meta
+    if resp == "n":
+        meta['race_name'] = input('What is the name of the race, for the database?\n')
+        meta['race_date'] = input('What was the date of the race, in the format yyyy-mm-dd\n')
+        meta['race_distance'] = input('What was the distance of the race, in metres?\n')
+        meta['race_climb'] = input('What was the total climb of the race, in metres?\n')
+        with open(filepath, 'w') as toml_file:
+            toml.dump(meta,toml_file)
+        return meta
+            
+def assign_race_meta(meta: dict) -> race_meta:
     race_metadata = race_meta()
-    race_meta.race_name = input('What is the name of the race, for the database?\n')
-    race_meta.race_date = input('What was the date of the race, in the format yyyy-mm-dd\n')
-    race_meta.race_distance = input('What was the distance of the race, in metres?\n')
-    race_meta.race_climb = input('What was the total climb of the race, in metres?\n')
+    race_metadata.race_name = meta['race_name']
+    race_metadata.race_date = meta['race_date']
+    race_metadata.race_distance = meta['race_distance']
+    race_metadata.race_climb = meta['race_climb']
+    return race_metadata
+
+def process_data_for_DB(scraped_data : pd.DataFrame) -> Tuple[race_meta,race_entries]:
     
+    meta = get_race_meta()
+    race_metadata = assign_race_meta(meta)
     #Create the data structure to store the main dataset
     num_entries = len(scraped_data.index)
     entries = race_entries(num_entries)
@@ -170,7 +202,7 @@ def process_data_for_DB(scraped_data : pd.DataFrame) -> Tuple[race_meta,race_ent
                 forename = scraped_data.iloc[:,forename_i]
                 surname = scraped_data.iloc[:,surname_i]
                 name = forename + ' ' + surname
-                return (name.values, [forename_i,surname_i])
+                return (name.values, [forename_i,surname_i]) 
         if col_name == 'Cat_Name':
             print('Is gender given in a separate column?')
             sep_gender = input('y/(n)')
@@ -188,11 +220,11 @@ def process_data_for_DB(scraped_data : pd.DataFrame) -> Tuple[race_meta,race_ent
         if choice == num_choices: #Selected None
             return (np.empty(0), [])
         
-        return (scraped_data.iloc[:,choice].values,[choice])
+        return (scraped_data.iloc[:,choice].values,[choice]) # type: ignore
 
     print('\n\nWe are looping through the data we need')
     for index, col_entries in enumerate(list(entries.data)):
-        (data,choices) = get_column_data(scraped_data,col_entries)
+        (data,choices) = get_column_data(scraped_data,col_entries) # type: ignore
         if data.size == 0:
             continue # don't need to add data, already an empty column
         else:
@@ -261,7 +293,7 @@ def append_to_DB(con: sqlite3.Connection, data_to_insert: pd.DataFrame,data_meta
     duplicated =  check_db_for_duplicate_races(Races,data_metadata)
     
     #Check the race series and return the appropriate series_ID (or exit)
-    data_metadata.series_id,series_name = suggest_race_series(Series,data_metadata)
+    data_metadata.series_id,series_name = suggest_race_series(Series,data_metadata,check)
     
     #Insert the race into the database!
     if not duplicated:
@@ -288,10 +320,10 @@ def append_to_DB(con: sqlite3.Connection, data_to_insert: pd.DataFrame,data_meta
     #Once we have multiple races with the same name, can't do a simple query to get race ID as
     # multiple values will be returned.
     # Instead you can query the cursor to find out what the number of the previous row added was
-    Race_ID = cur.lastrowid
-    query = 'SELECT * FROM Races '\
-            'WHERE Race_Name = ?'
-    Races = pd.read_sql_query(query,con,params=(data_metadata.race_name,))
+    query = """SELECT Race_ID FROM Races
+            WHERE Race_Name = ?
+            AND Race_Date = ?"""
+    Race_ID = pd.read_sql_query(query,con,params=(data_metadata.race_name,data_metadata.race_date)).squeeze()
 
     #RACERS
     #Get list of Racers not already in the database
@@ -335,14 +367,14 @@ def append_to_DB(con: sqlite3.Connection, data_to_insert: pd.DataFrame,data_meta
     data_to_insert.to_sql('Results',con,index=False,if_exists='append')
     print('Data Written')
     con.commit()
-    con.close()  
 
-def suggest_race_series(Series: pd.DataFrame, data_metadata: race_meta) -> Tuple[int,str]:
+def suggest_race_series(Series: pd.DataFrame, data_metadata: race_meta, check: bool) -> Tuple[int,str]:
     # Find the closest matching race series
     Series['distances'] = Series['Series_Name'].map(lambda i: Levenshtein.distance(i,data_metadata.race_name))
     Series = Series.sort_values(by = 'distances', ascending=True)
     print(f'The closest matching race series is: {Series.iloc[0]["Series_Name"]}')
-    if input('Is this the series you want to add the race to? (y/n)') == 'y':
+
+    if not check or input('Is this the series you want to add the race to? (y/n)') == 'y':
         print(f'Adding the race to: {Series.iloc[0]["Series_Name"]}')
         return Series.iloc[0]['Series_ID'],Series.iloc[0]['Series_Name']
     else:
@@ -385,27 +417,6 @@ def check_db_for_duplicate_racers(data_to_insert: pd.DataFrame, Racers: pd.DataF
     #Ensure no repeated entries
     Racers_new = Racers_new.drop_duplicates(subset=['Racer_Name'])
     return Racers_new
-def get_racetek_api(URL: str) -> pd.DataFrame:
-    response = requests.get(URL)
-    # racetek API gives a list of entries (each a single list).
-    fulljson = response.json()
-    data = pd.DataFrame(data = fulljson,
-                        columns = ['No.','First Name','Surname','Gender','Age Cat','Course','Club','Time',''],
-                        )
-    data['Position']=data.index
-    return data
-def get_avtiming_api(URL: str) -> pd.DataFrame:
-    api_url = URL
-    response = requests.get(api_url)
-    fulljson = response.json()
-    data = fulljson['data']
     
-    #These aren't consistent but should be ok to spoof column headings, will automatically pad column names according to the size of the array
-    col_names = ['Bib','Pos','Name','M/F','Cat','Cat_Pos','Club','Chip','Time']
-    pads_needed = len(data[0]) - len(col_names)
-    if pads_needed > 0:
-        for i in range(pads_needed):
-            col_names.append(f'Pad{i}')
-
-    return pd.DataFrame(data,columns=col_names)
-    
+if __name__ == "__main__":
+    get_race_meta()

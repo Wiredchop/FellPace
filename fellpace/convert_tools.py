@@ -1,7 +1,7 @@
 import numpy.typing as npt 
 import numpy as np
 import pandas as pd
-import FellPace_tools
+import fellpace.FellPace_tools as FellPace_tools
 def time_string_to_seconds(duration_strings : npt.NDArray) -> npt.NDArray:   
     ftr = [3600,60,1]
     out =[]
@@ -15,7 +15,12 @@ def time_string_to_seconds(duration_strings : npt.NDArray) -> npt.NDArray:
             hrsminssecs[2] = hrsminssecs[2].rsplit('.')[0]
             out.append(sum([a*b for a,b in zip(ftr, [int(i) for i in hrsminssecs])]))
         except:
-            out.append(None)
+            try:
+                #If it's not a time string, perhaps it's a decimal value of minutes
+                duration_float = float(duration_string)
+                out.append(int(duration_float*60))
+            except:
+                out.append(None)
         
     return np.array(out)
 
@@ -147,6 +152,11 @@ def convert_categories(category_strings : npt.ArrayLike) -> npt.ArrayLike:
     
     for category_string in category_strings:
         
+        if (not category_string) or pd.isna(category_string):
+            out.append(str.upper("UNC"))
+            continue
+            
+            
         #CASE L\W in stead of F (Ladies, not Female)
         category_string = sub('L|l|W|w','F',category_string)
         #CASE remove whitespaces at any point in the string
@@ -157,6 +167,8 @@ def convert_categories(category_strings : npt.ArrayLike) -> npt.ArrayLike:
         #CASE M or F only, append SENIOR
         if match('(M|F)$',category_string):
             category_string = category_string + 'SENIOR'
+        #CASE replace the S in MS or FS with SENIOR
+        category_string = sub('(?<=M|F)S$','SENIOR',category_string)
         
         category_string = sub('(?i)sen$','SENIOR',category_string)
         #CASE replace SENR with SENIOR, decided easier to do individual cases than try one shaky catch all
