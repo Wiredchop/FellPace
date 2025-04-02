@@ -26,7 +26,7 @@ def find_similar_name(con, name:str):
     return racers[racers['distance'] <= 2].reset_index(drop=True)
 
 
-def get_racers_results(con, racer_ID, season):
+def get_racers_results(con, racer_ID, season: int = -1) -> pd.DataFrame:
     season_filter = "" if season == -1 else "AND Season = ?"
     query = f"""
     WITH Racers_Results AS

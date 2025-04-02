@@ -38,7 +38,7 @@ def scrape_parkruns(settings: PRSettings, con: sqlite3.Connection):
                 these_settings.start_ID = PR_id
                 print(f'No more parkruns found for {parkrun} at ID {PR_id}')
                 with open('settings.toml', 'w') as f:
-                    toml.dump({parkrun: settings.__dict__}, f)
+                    f.write(toml.dumps(settings.model_dump()))
                 continue
             #Going to use regular expressions to get date rather than beautiful soup as only need to do once
             matches = search("(?<=class=\"format-date\">)[0-9/]+",resp_text)

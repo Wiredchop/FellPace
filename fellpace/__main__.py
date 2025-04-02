@@ -1,4 +1,4 @@
-import sqlite3
+import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 import typer
@@ -11,13 +11,17 @@ from fellpace.config import DB_PATH
 from fellpace.db.db_setup import setup_db
 from fellpace.extract.zscores import extract_all_zscore_data
 from fellpace.modelling.ransac import add_inliers
-from fellpace.modelling.training import get_race_coeffs
+from fellpace.modelling.training import get_race_coeffs, get_rmse_in_seconds
+from fellpace.modelling.prediction import get_predicted_times, get_prediction_probability_distribution
 from fellpace.plotting.races import plot_all_race_Zscores
 from fellpace.extract.races import get_race_series_summary, get_chase_summary
 
 from fellpace.extract.racers import find_similar_name, find_racer_ID, get_racers_results
 from fellpace.config import DB_PATH
 from fellpace.db.db_setup import setup_db
+from fellpace.convert_tools import seconds_to_time_string
+from fellpace.scrape_chase import process_chase_csv
+
 #Connect to the DB
 con = setup_db(DB_PATH)
 
@@ -65,9 +69,12 @@ def train_model(plot: bool = Option(False, help="Whether to plot the results or 
     con = setup_db(DB_PATH)
     data_Zs = extract_all_zscore_data(con)
     data_Zs = add_inliers(data_Zs)
-    coeffs = get_race_coeffs(data_Zs)
+    coeffs, _ = get_race_coeffs(data_Zs)
+    rmse = get_rmse_in_seconds(data_Zs, coeffs)
+    print(tabulate(rmse, headers='keys', tablefmt='rounded_outline'))
     if plot:
         plot_all_race_Zscores(data_Zs)
+    return coeffs
     
 @app.command()
 def print_race_data():
@@ -83,11 +90,7 @@ def print_chase_data():
     con.close() #TODO: Have a class that closes this automatically
     print(tabulate(chase_summary, headers='keys', tablefmt='rounded_outline'))
 
-@app.command()
-def print_racers_results(racer_name:str = 'nick hamillton'):
-    
-    con = setup_db(DB_PATH)
-    print(f"Getting results for {racer_name}")
+def secure_racer_id(con, racer_name: str):
     racer_id = find_racer_ID(con, name = racer_name)
     if racer_id is None:
         print(f"Racer {racer_name} not found in database.")
@@ -105,14 +108,78 @@ def print_racers_results(racer_name:str = 'nick hamillton'):
             print("No name selected, exiting.")
             return
         racer_id = names.iloc[selected_index]['Racer_ID']
-    results = get_racers_results(con, racer_id, -1)
+    return racer_id
+
+@app.command()
+def print_racers_results(racer_name:str = 'nick hamillton'):
+    
+    con = setup_db(DB_PATH)
+    print(f"Getting results for {racer_name}")
+    racer_id = secure_racer_id(con, racer_name)
+    if racer_id:
+        results = get_racers_results(con, racer_id, -1)
+        print(
+            tabulate(
+                results.sort_values(['Season','Race_Name']).reset_index(drop=True),
+                headers='keys',
+                tablefmt='rounded_outline'
+                )
+            )
+    
+@app.command()
+def print_racer_prediction(racer_name: str = 'nick hamilton'):
+    con = setup_db(DB_PATH)
+    data_Zs = extract_all_zscore_data(con)
+    data_Zs = add_inliers(data_Zs)
+    coeffs, _ = get_race_coeffs(data_Zs)
+    print(f"Predicting finish time for {racer_name}")
+    racer_id = secure_racer_id(con, racer_name)
+    prediction = get_predicted_times(con, coeffs,racer_id)
+    prediction['Predicted Time'] = prediction['Predicted Time'].apply(seconds_to_time_string)
     print(
         tabulate(
-            results.sort_values(['Season','Race_Name']).reset_index(drop=True),
+            prediction.sort_values(['Season','Race_Name']).reset_index(drop=True),
             headers='keys',
             tablefmt='rounded_outline'
             )
         )
+    con.close()
+    
+@app.command()
+def plot_racer_likelihoods(racer_name: str = 'nick hamilton'):
+    con = setup_db(DB_PATH)
+    data_Zs = extract_all_zscore_data(con)
+    data_Zs = add_inliers(data_Zs)
+    coeffs, covar = get_race_coeffs(data_Zs)
+    print(f"Predicting finish time for {racer_name}")
+    racer_id = secure_racer_id(con, racer_name)
+    racer_results = get_racers_results(con, racer_id)
+    
+    plt.figure(figsize=(10, 6))
+    
+    for _, result in racer_results.iterrows():
+        season = result['Season']
+        race = result['Race_Name']
+        ZScore = result['ZScore']    
+        p = get_prediction_probability_distribution(coeffs[race], covar[race], ZScore)
+
+        plt.plot(p.keys(), p.values(), label=f"{race} ({season})")
+        
+    plt.legend()  # Add legend to display the labels
+    plt.show()
+
+@app.command()
+def process_chase(file: str, date: str):
+    """
+    Process a Hallam Chase CSV file and insert its data into the database.
+
+    Args:
+        file (str): The name of the CSV file (e.g., 'Chase 2016.csv').
+        date (str): The date of the Chase in 'yyyy-mm-dd' format.
+    """
+    con = setup_db(DB_PATH)
+    process_chase_csv(file, date, con)
+    con.close()
 
 if __name__ == "__main__":
     app()

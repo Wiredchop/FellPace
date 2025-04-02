@@ -9,21 +9,13 @@ import math
 from fellpace.config import DB_PATH
 from fellpace.db.db_setup import setup_db
 from fellpace.extract.zscores import extract_all_zscore_data
-from fellpace.modelling.prediction import get_predicted_time
+from fellpace.modelling.prediction import get_predicted_times
 from fellpace.plotting.races import plot_all_race_Zscores
 from fellpace.stats.polyfit import get_coeffs
 from fellpace.stats.ransac import add_inliers
 
 
-def seconds_to_time_string(run_times: np.ndarray):
-    run_times_strings = []
-    for run_time in run_times:
-        seconds = divmod(run_time, 60)[1]
-        minutes_t = divmod(run_time, 60)[0]
-        hours = divmod(minutes_t, 60)[0]
-        minutes = divmod(minutes_t, 60)[1]
-        run_times_strings.append(f"{hours:02.0f}:{minutes:02.0f}:{seconds:02.0f}")
-    return run_times_strings
+
 
 def axis_time(seconds_in, pos):
     seconds = divmod(seconds_in, 60)[1]
@@ -38,8 +30,8 @@ def generate_predictions(con, coeffs, entries_file):
     with open(entries_file) as entries:
         for entry in entries:
             entry = entry.rstrip()
-            predictions = pd.concat([predictions, get_predicted_time(con, coeffs, entry, 2023)])
-            predictions = pd.concat([predictions, get_predicted_time(con, coeffs, entry, 2022)])
+            predictions = pd.concat([predictions, get_predicted_times(con, coeffs, entry, 2023)])
+            predictions = pd.concat([predictions, get_predicted_times(con, coeffs, entry, 2022)])
     predictions = predictions.sort_values(['Racer_Name', 'Season', 'Race_Name'])
     predictions['Racer_Name'] = predictions['Racer_Name'].str.title()
     predictions['ParkRun'] = predictions['Race_Name'].str.contains("PR").replace({True: 'Parkrun', False: 'Race'})
@@ -57,7 +49,7 @@ def generate_other_predictions(con, coeffs, entries_file):
     with open(entries_file) as entries:
         for entry in entries:
             entry = entry.rstrip()
-            predictions_other = pd.concat([predictions_other, get_predicted_time(con, coeffs, entry)])
+            predictions_other = pd.concat([predictions_other, get_predicted_times(con, coeffs, entry)])
     predictions_other = predictions_other.loc[predictions_other['Season'] != 2023]
     predictions_other = predictions_other.sort_values(['Racer_Name', 'Season', 'Race_Name'])
     predictions_other['Racer_Name'] = predictions_other['Racer_Name'].str.title()

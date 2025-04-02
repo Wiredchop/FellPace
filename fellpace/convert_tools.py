@@ -2,6 +2,14 @@ import numpy.typing as npt
 import numpy as np
 import pandas as pd
 import fellpace.FellPace_tools as FellPace_tools
+
+
+def seconds_to_time_string(seconds: float):
+    
+    minutes_t, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes_t, 60)
+    return f"{hours:02.0f}:{minutes:02.0f}:{seconds:02.0f}"
+
 def time_string_to_seconds(duration_strings : npt.NDArray) -> npt.NDArray:   
     ftr = [3600,60,1]
     out =[]

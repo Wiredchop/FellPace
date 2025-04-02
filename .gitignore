@@ -1,6 +1,9 @@
 csv/
 pdf/
+Entries/
 .vscode/
 __pycache__/
 legacy/
-fellpace.db
+*.db
+*.egg-info/
+*.png

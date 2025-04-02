@@ -6,6 +6,7 @@ def extract_all_zscore_data(con):
     (
         SELECT Racer_ID, 
                CAST(strftime("%Y",CD.Chase_Date) AS INTEGER) - 1 as Season,
+               Time,
                ZScore_log
         FROM Results_Chase
         JOIN Chases as CD
@@ -40,7 +41,7 @@ def extract_all_zscore_data(con):
         WHERE Time IS NOT NULL
         GROUP BY Racer_ID, C.Race_Name, C.Season
     )
-    SELECT R.Racer_ID,R.Race_Name, R.Season, R.ZScore, HC.ZScore_log as HCScore
+    SELECT R.Racer_ID,R.Race_Name, R.Season, R.ZScore, HC.Time as HCTime, HC.ZScore_log as HCScore
     FROM Results_joined as R
     LEFT JOIN Chase_Yrs as HC
     ON HC.Racer_ID = R.Racer_ID

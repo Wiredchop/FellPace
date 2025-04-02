@@ -116,7 +116,8 @@ def convert_Chase_ZScore_logs(con: sqlite3.Connection,Zscore_logs: pd.Series, ye
                 JOIN Chases as C ON C.Chase_ID = R.Chase_ID
                 WHERE Year == ?   
     '''
-    
+    year = int(year)
+    # Ensure the year is an integer, np int type doesn't work with sqlite3
     Chase_stats = pd.read_sql(SQL_get_log_chase_stats,con,params=(year,))
     pred_logs = Chase_stats['mn'].values + Chase_stats['sd'].values * Zscore_logs
     return np.exp(pred_logs)
