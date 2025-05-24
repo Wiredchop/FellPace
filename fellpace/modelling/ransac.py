@@ -13,7 +13,7 @@ def find_inliers(group):
     X = group.ZScore.values.reshape([-1,1])
     y = group.HCScore.values.reshape([-1,1])
     if group.name in modify_races:
-        ransac = linear_model.RANSACRegressor(is_model_valid=force_over_1)
+        ransac = linear_model.RANSACRegressor(is_model_valid=force_over_1, max_trials=1000)
     else:
         ransac = linear_model.RANSACRegressor()
         

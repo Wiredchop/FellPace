@@ -2,10 +2,18 @@ import numpy as np
 import pandas as pd
 from fellpace.analysis_tools import convert_Chase_ZScore_logs
 from fellpace.db.db_setup import setup_db
-from fellpace.config import DB_PATH
+from fellpace.config import DB_PATH, COEFFS_FILE_PATH, COVAR_FILE_PATH
 
+def load_models():
+    if COEFFS_FILE_PATH.exists() and COVAR_FILE_PATH.exists():
+        coeffs = pd.read_json(COEFFS_FILE_PATH, orient='index', typ='series')
+        covar = pd.read_json(COVAR_FILE_PATH, orient='index', typ='series')
+    else:
+        print("No model files found. Please train the models first.")
+    return coeffs, covar
+        
 
-def get_race_coeffs(data_Zs, use_inliers=True):
+def train_models(data_Zs, use_inliers=True):
     if use_inliers:
         data_Zs = data_Zs.loc[data_Zs['inlier'] == True]
     
@@ -26,13 +34,13 @@ def get_rmse_in_seconds(data_Zs: pd.DataFrame, coeffs, evaluate_inliers_only = T
         )
     con = setup_db(DB_PATH)
 
-    data_Zs['predicted_time'] = (data_Zs.groupby(['Race_Name','Season'], sort=False)
+    predicted_times = (data_Zs.groupby(['Race_Name','Season'], sort=False, group_keys=False)
     .apply(
         lambda x: convert_Chase_ZScore_logs(con, x['predicted_Z'], year = x.name[1] + 1)
         )
         
     )
     
-    data_Zs['residuals'] = data_Zs['predicted_time'] - data_Zs['HCTime']
+    data_Zs['residuals'] = predicted_times - data_Zs['HCTime']
     RMSE = data_Zs.groupby('Race_Name').apply(lambda x: np.sqrt(np.mean(x['residuals']**2)))
     return RMSE

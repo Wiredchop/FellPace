@@ -48,7 +48,36 @@ def get_linear_models(data:pd.DataFrame, g: str,x: str,y: str):
     Z_models = data_for_models.groupby(g).apply(calculate_linear_model)
     return Z_models.to_dict()
 
-def remove_outliers(data: pd.DataFrame,x: str, y: str,g:str, thresh: float = 2.5)-> Tuple[pd.DataFrame,pd.Series,np.ndarray]:
+def identify_outliers_in_predictions(predicted_values: pd.Series, threshold: float = 1.1) -> pd.Series:
+    """Identify outliers in predicted values according to a proportional change in stanndard deviation.
+    
+    Requires at least 4 values overall to get a stable initial std deviation.
+    
+    Args:
+        predicted_values (pd.Series): A series of predicted values
+        threshold (float): The threshold for identifying outliers, default is 2.5 standard deviations"""
+    
+    predicted_values.name = 'values'
+    if len(predicted_values) < 4:
+        print("Not enough data to identify outliers.")
+        return pd.Series([False] * len(predicted_values), index=predicted_values.index)
+    predicted_values = predicted_values.sort_values(ascending=True).reset_index()
+    outliers = pd.Series([False] * len(predicted_values), index=predicted_values['index'])
+    expanding_std = predicted_values['values'].expanding().std()
+    prop_increase = expanding_std / expanding_std.shift(1)
+    
+    # Ignore first three elements as they are not stable
+    prop_increase.iloc[:3] = 1.0  # Set to 1.0 to avoid false positives in the first three elements
+    # identify first index over the threshold
+    first_index = prop_increase[(prop_increase) > threshold].index[0]
+    outliers.iloc[first_index:] = True  # Mark all subsequent values as outliers
+    outliers = outliers.sort_index()
+    
+    
+    
+    return outliers
+
+def remove_outliers_xy(data: pd.DataFrame,x: str, y: str,g:str, thresh: float = 2.5)-> Tuple[pd.DataFrame,pd.Series,np.ndarray]:
     """Remove outliers from an x:y plot by assuming an x=y relationship and transforming data along this line
     this is a particularly simple transformation, could transform along regression line for more sophisticated method.
     After transformation, calculate z_score of distances from lines and remove outliers

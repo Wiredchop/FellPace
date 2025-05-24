@@ -9,7 +9,7 @@ def plot_inlier_outlier(x, y, inlier, **kwargs):
     y_in = y.loc[inlier == True]
     x_out = x.loc[inlier == False]
     y_out = y.loc[inlier == False]
-    sns.regplot(x=x_in, y=y_in, ci=0)
+    sns.regplot(x=x_in, y=y_in)
     sns.scatterplot(x=x_out, y=y_out, s=60, color=[0.6, 0.6, 0.6], alpha=0.5).set(xlabel='Race performance', ylabel='Chase performance')
 
 

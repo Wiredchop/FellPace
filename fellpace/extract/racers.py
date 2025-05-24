@@ -75,3 +75,24 @@ if __name__ == "__main__":
     con = setup_db(DB_PATH)
     print(get_racers_results(con, 353, 2022))
     con.close()
+
+
+def secure_racer_id(con, racer_name: str):
+    racer_id = find_racer_ID(con, name = racer_name)
+    if racer_id is None:
+        print(f"Racer {racer_name} not found in database.")
+        print("Looking for similar names...")
+        names = find_similar_name(con, name = racer_name)
+        # Print each name with a number and prompt to select one
+        if names.empty:
+            print("No similar names found.")
+            return
+        for i, row in names.iterrows():
+            print(f"{i}: {row['Racer_Name']}")
+        print(f"{i+1}: None of these are correct")
+        selected_index = int(input("Select the number of the name you want to use: "))
+        if selected_index == i+1:
+            print("No name selected, exiting.")
+            return
+        racer_id = names.iloc[selected_index]['Racer_ID']
+    return racer_id
