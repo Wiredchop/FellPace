@@ -8,6 +8,7 @@ import numpy.typing as npt
 import matplotlib.pyplot as plt
 from typing import Tuple
 from sklearn.linear_model import LinearRegression
+from loguru import logger
 
 def calculate_position_stats(time: npt.ArrayLike) -> Tuple[npt.ArrayLike, npt.ArrayLike,npt.ArrayLike]:
     """Calculate position stats, specifically the percentile AND zscore for position data TIME!!!
@@ -48,31 +49,27 @@ def get_linear_models(data:pd.DataFrame, g: str,x: str,y: str):
     Z_models = data_for_models.groupby(g).apply(calculate_linear_model)
     return Z_models.to_dict()
 
-def identify_outliers_in_predictions(predicted_values: pd.Series, threshold: float = 1.1) -> pd.Series:
-    """Identify outliers in predicted values according to a proportional change in stanndard deviation.
+def identify_outliers_in_predictions(predicted_values: pd.Series, threshold: float = 1.5) -> pd.Series:
+    """Identify outliers in predicted values using Tukey's fences method.
     
-    Requires at least 4 values overall to get a stable initial std deviation.
+    Requires at least 4 values overall to get a stable inter-quartile range.
     
     Args:
         predicted_values (pd.Series): A series of predicted values
-        threshold (float): The threshold for identifying outliers, default is 2.5 standard deviations"""
+        threshold (float): The threshold for identifying outliers, default is 1.5 IQR"""
     
     predicted_values.name = 'values'
     if len(predicted_values) < 4:
-        print("Not enough data to identify outliers.")
+        logger.warning("Not enough data to identify outliers.")
         return pd.Series([False] * len(predicted_values), index=predicted_values.index)
-    predicted_values = predicted_values.sort_values(ascending=True).reset_index()
-    outliers = pd.Series([False] * len(predicted_values), index=predicted_values['index'])
-    expanding_std = predicted_values['values'].expanding().std()
-    prop_increase = expanding_std / expanding_std.shift(1)
     
-    # Ignore first three elements as they are not stable
-    prop_increase.iloc[:3] = 1.0  # Set to 1.0 to avoid false positives in the first three elements
-    # identify first index over the threshold
-    first_index = prop_increase[(prop_increase) > threshold].index[0]
-    outliers.iloc[first_index:] = True  # Mark all subsequent values as outliers
-    outliers = outliers.sort_index()
+    Q1 = predicted_values.quantile(0.25)
+    Q3 = predicted_values.quantile(0.75)
+    IQR = Q3 - Q1
     
+    threshold_value = Q3 + (threshold * IQR)
+    outliers = predicted_values > threshold_value
+       
     
     
     return outliers

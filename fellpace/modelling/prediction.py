@@ -2,6 +2,8 @@ from scipy.stats import norm
 from fellpace.analysis_tools import convert_Chase_ZScore_logs_avg
 from fellpace.extract.racers import get_racers_results
 from fellpace.modelling.bayesian import recency_weighted_bayesian
+from fellpace.parkrun.stats import parkrun_mean_std
+
 from typing import Dict, Tuple
 from datetime import date
 
@@ -107,3 +109,43 @@ def get_probability_distribution(mean, std_dev, a = -3, b = 3, step=0.01):
         current += step
 
     return pd.Series(probabilities)
+
+
+def get_prediction_from_parkrun_time(con, parkrun_time: str, coeffs: pd.DataFrame, cov_matrices: Dict[str, np.ndarray]) -> pd.DataFrame:
+    """
+    Get the predicted times based on a parkrun time.
+    
+    Args:
+        con: Database connection.
+        parkrun_time (str): The parkrun time in HH:MM:SS format.
+        coeffs (pd.DataFrame): Coefficients for the prediction model.
+        cov_matrices (Dict[str, np.ndarray]): Covariance matrices for the prediction model.
+        
+    Returns:
+        pd.DataFrame: DataFrame with predicted times.
+    """
+    # Convert parkrun time to seconds
+    parkrun_seconds = sum(int(x) * 60 ** i for i, x in enumerate(reversed(parkrun_time.split(':'))))
+    
+    log_seconds = np.log(parkrun_seconds)
+    
+    stats = parkrun_mean_std(con, season = (date.today().year)-1)
+    
+    z_score = ((log_seconds - stats['Mean']) / stats['StdDev']).squeeze()
+    
+    mean, std = get_prediction_with_uncertainty(coeffs, cov_matrices, z_score)
+    
+    pr_prediction = mean - (1.96 * std) 
+    
+    pr_prediction_t = convert_Chase_ZScore_logs_avg(con, pr_prediction)[0]
+    
+    return pr_prediction_t
+    
+if __name__ == "__main__":
+    # This is just a placeholder to prevent execution when imported
+    from fellpace.db.db_setup import setup_db
+    from fellpace.config import DB_PATH
+    from fellpace.modelling.training import load_models
+    con = setup_db(DB_PATH)
+    coeffs, covars = load_models()
+    get_prediction_from_parkrun_time(con, "23:30", coeffs, covars)

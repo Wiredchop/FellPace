@@ -31,7 +31,7 @@ class std_dev:
     def finalize(self):
         return math.sqrt(self.sq/self.n - (self.sum/self.n * self.sum/self.n))
 
-def setup_db(path_to_db_file: Path):
+def setup_db(path_to_db_file: Path) -> sqlite3.Connection:
     """return a connection to the fellpace DB"""
     
     con = sqlite3.connect(path_to_db_file)

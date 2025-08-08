@@ -27,10 +27,16 @@ from fellpace.db.db_setup import setup_db
 from fellpace.convert_tools import seconds_to_time_string
 from fellpace.scrape_chase import process_chase_csv
 
-from fellpace.entries import load_entries
+from fellpace.entries import load_entries, process_entries
+from fellpace.filter import filter_race_results
+from fellpace.plotting.racetimes import plot_racers_results
+from loguru import logger
 
 #Connect to the DB
 con = setup_db(DB_PATH)
+
+# Configure loguru to log to a file
+logger.add("fellpace.log", rotation="10 MB")
 
 app = typer.Typer()
 # Choose method of getting data
@@ -69,62 +75,65 @@ def add_data(data):
     #Clean any null entries for time, which can't be converted to a Zscore
     valid_data = entries.data.loc[~entries.data.Time.isnull()]
     append_to_DB(con,valid_data,metadata)
-    
+
 @app.command()
-def train_model(plot: bool = Option(False, help="Whether to plot the results or not")):
+def train_model(
+    plot: bool = Option(
+        False, "--plot", "-p", help="Whether to plot the results or not"
+    )
+):
     """Get coefficients from all race data."""
     con = setup_db(DB_PATH)
     data_Zs = extract_all_zscore_data(con)
     data_Zs = add_inliers(data_Zs)
     coeffs, covar = train_models(data_Zs)
     rmse = get_rmse_in_seconds(data_Zs, coeffs)
-    print(tabulate(pd.DataFrame(rmse), headers=['Race Name','RMSE'], tablefmt='rounded_outline'))
+    logger.info(tabulate(pd.DataFrame(rmse), headers=['Race Name','RMSE'], tablefmt='rounded_outline'))
     if plot:
         plot_all_race_Zscores(data_Zs)
 
     coeffs.to_json(COEFFS_FILE_PATH)
     covar.to_json(COVAR_FILE_PATH)
     return coeffs
-    
+
 @app.command()
 def print_race_data():
     con = setup_db(DB_PATH)
     race_summary = get_race_series_summary(con)
     con.close() #TODO: Have a class that closes this automatically
-    print(tabulate(race_summary, headers='keys', tablefmt='rounded_outline'))
+    logger.info(tabulate(race_summary, headers='keys', tablefmt='rounded_outline'))
 
 @app.command()
 def print_chase_data():
     con = setup_db(DB_PATH)
     chase_summary = get_chase_summary(con)
     con.close() #TODO: Have a class that closes this automatically
-    print(tabulate(chase_summary, headers='keys', tablefmt='rounded_outline'))
+    logger.info(tabulate(chase_summary, headers='keys', tablefmt='rounded_outline'))
 
 @app.command()
 def print_racers_results(racer_name:str = 'nick hamillton'):
-    
     con = setup_db(DB_PATH)
-    print(f"Getting results for {racer_name}")
+    logger.info(f"Getting results for {racer_name}")
     racer_id = secure_racer_id(con, racer_name)
     if racer_id:
         results = get_racers_results(con, racer_id, -1)
-        print(
+        logger.info(
             tabulate(
                 results.sort_values(['Season','Race_Name']).reset_index(drop=True),
                 headers='keys',
                 tablefmt='rounded_outline'
                 )
             )
-    
+
 @app.command()
 def print_racer_prediction(racer_name: str = 'nick hamilton'):
     con = setup_db(DB_PATH)
     coeffs, _ = load_models()
-    print(f"Predicting finish time for {racer_name}")
+    logger.info(f"Predicting finish time for {racer_name}")
     racer_id = secure_racer_id(con, racer_name)
     prediction = get_predicted_times(con, coeffs,racer_id)
     prediction['Predicted Time'] = prediction['Predicted Time'].apply(seconds_to_time_string)
-    print(
+    logger.info(
         tabulate(
             prediction.sort_values(['Season','Race_Name']).reset_index(drop=True),
             headers='keys',
@@ -145,14 +154,14 @@ def examine_entries(year: int = date.today().year):
     """
     entries = load_entries(year)
     if entries.empty:
-        print(f"No entries found for {year}.")
+        logger.info(f"No entries found for {year}.")
         return
     all_results = pd.DataFrame()
     for i, row in entries.iterrows():
         racer_name = row['Name'].lower().strip()
         racer_id = secure_racer_id(con, racer_name)
         if racer_id is None:
-            print(f"Racer {racer_name} not found in database.")
+            logger.info(f"Racer {racer_name} not found in database.")
             continue
         all_results = pd.concat([all_results, get_racers_results(con, racer_id)], ignore_index=True)
         racer_counts = all_results.groupby('Racer_Name').size()
@@ -160,19 +169,18 @@ def examine_entries(year: int = date.today().year):
     # merge back to entries
     entries = entries.merge(racer_counts.rename('Count'), left_on='Name', right_index=True, how='left')
         
-    print(tabulate(
-        entries.sort_values('Count', ascending=False).reset_index(drop=True),
-        headers='keys',
-        tablefmt='rounded_outline'
-    ))
-    
-
+    logger.info(
+        tabulate(
+            entries.sort_values('Count', ascending=False).reset_index(drop=True),
+            headers='keys',
+            tablefmt='rounded_outline'
+        ))
 
 @app.command()
 def show_race_outliers(racer_name: str = 'nick hamilton'):
     con = setup_db(DB_PATH)
     coeffs, covar = load_models()
-    print(f"Examining potential outliers for {racer_name}")
+    logger.info(f"Examining potential outliers for {racer_name}")
     racer_id = secure_racer_id(con, racer_name)
     
     racer_results = get_predicted_times(con, coeffs,racer_id).sort_values('PredZ', ascending=True)
@@ -186,35 +194,32 @@ def show_race_outliers(racer_name: str = 'nick hamilton'):
     # drop Racer_Name column
     racer_results = racer_results.drop(columns=['Racer_Name'])
     # use tabulate to print racer_results
-    print(tabulate(racer_results, headers='keys', tablefmt='rounded_outline'))
-    print(racer_results['Expanding Mean'].mean())
+    logger.info(tabulate(racer_results, headers='keys', tablefmt='rounded_outline'))
+    logger.info(racer_results['Expanding Mean'].mean())
     con.close()
 
 @app.command()
 def plot_racer_likelihoods(racer_name: str = 'nick hamilton'):
     con = setup_db(DB_PATH)
     coeffs, covar = load_models()
-    print(f"Predicting finish time for {racer_name}")
+    logger.info(f"Predicting finish time for {racer_name}")
     racer_id = secure_racer_id(con, racer_name)
     racer_results = get_racers_results(con, racer_id)
         
-    _, ax = plt.subplots(figsize=(10, 6))
     racer_results = get_prediction_with_uncertainty_many(coeffs, covar, racer_results)
     
-    racer_results['outlier'] = identify_outliers_in_predictions(racer_results['Zpred_mu'], threshold=1.1)
-    
-    for _, result in racer_results.iterrows():
-        season = result['Season']
-        race = result['Race_Name']
-        # plot dashed if outlier
-        if result['outlier']:
-            linestyle = '--'
-        else:
-            linestyle = '-'
-        plot_time_normal(con, result['Zpred_mu'], result['Zpred_sig'], f'{race}: {season}', ax, alpha = 1/(1+2024-season), linestyle=linestyle)
+    racer_results['outlier'] = identify_outliers_in_predictions(racer_results['Zpred_mu'], threshold=1.2)
         
+    racer_results, excluded_results = filter_race_results(racer_results)
+    
     chase_mu, chase_sig = make_chase_prediction(racer_results, prediction_year=2024, verbose=True)
+    
+    _, ax = plt.subplots(figsize=(10, 6))    
+    
+    plot_racers_results(racer_results, con, ax=ax, linestyle='-')
+    plot_racers_results(excluded_results, con, ax=ax, linestyle=':')
     plot_time_normal(con, chase_mu, chase_sig, 'Chase 2024',ax, color='black', linewidth=2)
+    
     prediction = chase_mu - (1.96 * chase_sig)
     prediction_t = convert_Chase_ZScore_logs_avg(con, prediction)
     plt.vlines(prediction_t, 0, 0.2, color='black', linestyle='--', label='Predicted time')
@@ -236,6 +241,12 @@ def process_chase(file: str, date: str):
     con = setup_db(DB_PATH)
     process_chase_csv(file, date, con)
     con.close()
+    
+@app.command()
+def entries():
+    con = setup_db(DB_PATH)
+    entries = load_entries()
+    process_entries(entries, con)
 
 if __name__ == "__main__":
     app()

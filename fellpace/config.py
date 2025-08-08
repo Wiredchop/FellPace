@@ -12,3 +12,6 @@ ENTRIES_PATH = PROJECT_PATH.parent / "entries"
 MODELS_PATH = PROJECT_PATH.parent / "models"
 COEFFS_FILE_PATH = MODELS_PATH / "coeffs.json"
 COVAR_FILE_PATH = MODELS_PATH / "covars.json"
+
+# Race results
+EXCLUDE_LIST = ['Exterminator']
