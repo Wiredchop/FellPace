@@ -39,7 +39,16 @@ def plot_racers_results(racer_results: pd.DataFrame, con: sqlite3.Connection, li
 
         
         
-def plot_racer_entry(con: sqlite3.Connection, racer_results: pd.DataFrame,chase_mu, chase_sig, prediction_t, racer_name: str, prediction_year: int = date.today().year):
+def plot_racer_entry(
+    con: sqlite3.Connection,
+    racer_results: pd.DataFrame,
+    chase_mu: float,
+    chase_sig: float,
+    prediction_t: float,
+    racer_name: str,
+    prediction_year: int = date.today().year,
+    save_figure: bool = False
+):
     """
     Plot the results of a single racer.
     
@@ -47,7 +56,12 @@ def plot_racer_entry(con: sqlite3.Connection, racer_results: pd.DataFrame,chase_
     the same style.
     
     Args:
+        con (sqlite3.Connection): Database connection.
         racer_results (pd.DataFrame): DataFrame containing the racer's results.
+        chase_mu (float): Mean of the chase prediction.
+        chase_sig (float): Standard deviation of the chase prediction.
+        prediction_t (float): Predicted time for the racer.
+        prediction_year (int): Year of the prediction, defaults to current year.
         racer_name (str): Name of the racer.
     """
     _, ax = plt.subplots(figsize=(10, 6))
@@ -69,7 +83,8 @@ def plot_racer_entry(con: sqlite3.Connection, racer_results: pd.DataFrame,chase_
     plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: seconds_to_time_string(x)))  # Format xticks
     plt.title(f"Results for {racer_name}")
     plt.legend()    
-    save_path = ENTRIES_PATH / f'predictions_{prediction_year}'
-    if not save_path.exists():
-        save_path.mkdir(parents=True)
-    plt.savefig(save_path / f'{racer_name}.png')
+    if save_figure:
+        save_path = ENTRIES_PATH / f'predictions_{prediction_year}'
+        if not save_path.exists():
+            save_path.mkdir(parents=True)
+        plt.savefig(save_path / f'{racer_name}.png')
