@@ -1,7 +1,7 @@
 from scipy.stats import norm
 from fellpace.analysis_tools import convert_Chase_ZScore_logs_avg
 from fellpace.extract.racers import get_racers_results
-from fellpace.modelling.bayesian import recency_weighted_bayesian
+from fellpace.modelling.bayesian import calculate_initial_weights, calculate_recency_weights ,recency_weighted_bayesian
 from fellpace.parkrun.stats import parkrun_mean_std
 
 from typing import Dict, Tuple
@@ -56,8 +56,20 @@ def make_chase_prediction(racer_result_with_predictions, prediction_year: int = 
     """
     Make a single prediction for the chase based on a series of individual predictions.
     
+    This function prepares each result by calculating initial weights based on the results we have.
+    It then adjusts these weights based on the recency of the results.
     
+    From this it adds the results to a bayesian update model to get a final prediction.
+    
+    Args:
+        racer_result_with_predictions (pd.DataFrame): DataFrame containing the results with predictions.
+        prediction_year (int): The year for which the prediction is made. Defaults to current year.
+        verbose (bool): If True, prints additional information about the prediction process.
+    
+    Returns:
+        Tuple[float, float]: The predicted mean and standard deviation of the chase ZScore.
     """
+    assert (racer_result_with_predictions['Season'] < prediction_year).all(), "All results must be from seasons BEFORE the prediction year"
     if prediction_year is None:
         prediction_year = date.today().year
     
@@ -65,18 +77,28 @@ def make_chase_prediction(racer_result_with_predictions, prediction_year: int = 
     prior_mu = 0
     prior_sigma = 1
     
+    # Calculate initial weights for each race
+    racer_result_with_predictions['Initial_Weight'] = calculate_initial_weights(racer_result_with_predictions)
+    
+    # Update the weights based on recency
+    initial_weights = racer_result_with_predictions['Initial_Weight'].values
+    season = racer_result_with_predictions['Season'].values
+    racer_result_with_predictions['Recency_Weight'] = calculate_recency_weights(
+        prediction_year,
+        season,
+        initial_weights
+    )
+    
     # Extract values from the DataFrame
-    performance_years = racer_result_with_predictions['Season'].values
+    weights = racer_result_with_predictions['Recency_Weight'].values
     mu_values = racer_result_with_predictions['Zpred_mu'].values
     sigma_values = racer_result_with_predictions['Zpred_sig'].values
     
-    # Calculate the time since the performance year    
-    times_since_performance = np.array([prediction_year - year for year in performance_years])
     if verbose:
         race_names = (racer_result_with_predictions['Race_Name'] + ' ' + racer_result_with_predictions['Season'].astype(str)).values
     else:
         race_names = None
-    predicted_mu, predicted_sigma = recency_weighted_bayesian(prior_mu, prior_sigma, mu_values, sigma_values, times_since_performance, race_names=race_names) 
+    predicted_mu, predicted_sigma = recency_weighted_bayesian(prior_mu, prior_sigma, mu_values, sigma_values, weights, race_names=race_names) 
     return predicted_mu, predicted_sigma
     
 

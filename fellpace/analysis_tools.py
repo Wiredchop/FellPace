@@ -58,20 +58,20 @@ def identify_outliers_in_predictions(predicted_values: pd.Series, threshold: flo
         predicted_values (pd.Series): A series of predicted values
         threshold (float): The threshold for identifying outliers, default is 1.5 IQR"""
     
+    outliers = pd.Series([False] * len(predicted_values), index=predicted_values.index)
+    
     predicted_values.name = 'values'
     if len(predicted_values) < 4:
         logger.warning("Not enough data to identify outliers.")
-        return pd.Series([False] * len(predicted_values), index=predicted_values.index)
+        return outliers
+    for _ in range(2): # Run outliers twice to ensure some 'midway' outliers are identified.
+        Q1 = predicted_values.loc[~outliers].quantile(0.25)
+        Q3 = predicted_values.loc[~outliers].quantile(0.75)
+        IQR = Q3 - Q1
     
-    Q1 = predicted_values.quantile(0.25)
-    Q3 = predicted_values.quantile(0.75)
-    IQR = Q3 - Q1
-    
-    threshold_value = Q3 + (threshold * IQR)
-    outliers = predicted_values > threshold_value
-       
-    
-    
+        threshold_value = Q3 + (threshold * IQR)
+        outliers = predicted_values > threshold_value
+
     return outliers
 
 def remove_outliers_xy(data: pd.DataFrame,x: str, y: str,g:str, thresh: float = 2.5)-> Tuple[pd.DataFrame,pd.Series,np.ndarray]:

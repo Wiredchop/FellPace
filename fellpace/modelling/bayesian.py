@@ -1,11 +1,57 @@
 import numpy as np
+import pandas as pd
 from tabulate import tabulate
+from loguru import logger
 
-def recency_weighted_bayesian(prior_mu, prior_sigma, observed_mu, observed_sigma, time_since_race,race_names = None, lambda_decay=0.25):
+
+def calculate_initial_weights(racer_results: pd.DataFrame, lower_weight: float = 0.8, heavier_weight: float = 1.2) -> pd.Series:
+    """
+    Calculate what the initial weights should be for each race.
+    
+    Most races are weighted as 1, Parkrun has a lower weight due to uncertainty in the results.
+    Previous Hallam Chase results are weighted more heavily as they are direct comparisons.
+
+    """
+    
+    initial_weights = np.where(
+        racer_results['Race_Name'].str.contains('PR_'),
+        lower_weight,
+        np.where(
+            racer_results['Race_Name'].str.contains('Hallam Chase'),
+            heavier_weight,
+            1.0
+        )
+    )
+    
+    return pd.Series(initial_weights, index=racer_results.index, name='Initial_Weight')
+
+def calculate_recency_weights(year_to_predict: int, season: np.ndarray, initial_weights: np.ndarray, lambda_decay: float=0.25):
+    """
+    Calculate recency weights based on the time since the race.
+    
+    Weights are an exponential decay function with a customisable decay rate.
+    
+    This function does NOT normalise the weights, as they are used to scale the precision of the observed values.
+    
+    Args:
+        year_to_predict (int): The year that is being predicted.
+        season (np.ndarray): The seasons of the races.
+        initial_weights (np.ndarray): The initial weights for each race.
+        lambda_decay (float): The decay rate for the exponential function.
+        
+    """
+    if (season >= year_to_predict).any():
+        logger.critical(f"Cannot adjust weights for seasons ahead of the prediction year.")
+        raise ValueError("All seasons must be before the prediction year.")
+    time_since_race = (year_to_predict - 1) - season    
+    return initial_weights * np.exp(-lambda_decay * time_since_race)
+
+
+def recency_weighted_bayesian(prior_mu, prior_sigma, observed_mu, observed_sigma, weights, race_names = None, lambda_decay=0.25):
     """
     Compute the posterior mean and standard deviation using a recency-weighted Bayesian approach.
     """
-    weights = np.exp(-lambda_decay * time_since_race)
+
     precisions = weights / (observed_sigma ** 2)
     prior_precision = 1 / (prior_sigma ** 2)
     if race_names is not None:

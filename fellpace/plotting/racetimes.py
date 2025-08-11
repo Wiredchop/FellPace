@@ -39,22 +39,29 @@ def plot_racers_results(racer_results: pd.DataFrame, con: sqlite3.Connection, li
 
         
         
-def plot_racer_entry(con: sqlite3.Connection, racer_results: pd.DataFrame, excluded_results: pd.DataFrame,chase_mu, chase_sig, prediction_t, racer_name: str, prediction_year: int = date.today().year):
+def plot_racer_entry(con: sqlite3.Connection, racer_results: pd.DataFrame,chase_mu, chase_sig, prediction_t, racer_name: str, prediction_year: int = date.today().year):
     """
     Plot the results of a single racer.
     
+    If the racer_results DataFrame does not contain an 'include' column, all races will be plotted in 
+    the same style.
+    
     Args:
         racer_results (pd.DataFrame): DataFrame containing the racer's results.
-        excluded_results (pd.DataFrame): DataFrame containing the excluded results.
         racer_name (str): Name of the racer.
     """
     _, ax = plt.subplots(figsize=(10, 6))
     
-    plot_racers_results(racer_results,con, ax=ax, linestyle='-')
-    plot_racers_results(excluded_results,con, ax=ax, linestyle=':')
+    if 'include' in racer_results.columns:
+        included_results = racer_results[racer_results['include']]
+        excluded_results = racer_results[~racer_results['include']]
+        plot_racers_results(included_results,con, ax=ax, linestyle='-')
+        plot_racers_results(excluded_results,con, ax=ax, linestyle=':')
+    else:
+        plot_racers_results(racer_results,con, ax=ax, linestyle='-')
     
     
-    plot_time_normal(con, chase_mu, chase_sig, 'Chase 2024',ax, color='black', linewidth=2)
+    plot_time_normal(con, chase_mu, chase_sig, 'Chase Prediction',ax, color='black', linewidth=2)
     
     plt.vlines(prediction_t, 0, 0.2, color='black', linestyle='--', label='Predicted time')
     

@@ -3,8 +3,10 @@
 from fellpace.config import EXCLUDE_LIST
 import pandas as pd
 
-def filter_race_results(racer_results: pd.DataFrame) -> pd.DataFrame:
-    """Filter races out of results if we think they should not be included in the analysis.
+def filter_race_results(racer_results: pd.DataFrame) -> None:
+    """Create an 'Included' column for race results.
+    
+    A race is included/excluded if:
     
     1. Any race names that are in an exclusion list (can be tweaked in the config file)
     2. If we have more than three results that are NOT parkrun, remove any parkrun results.
@@ -30,4 +32,4 @@ def filter_race_results(racer_results: pd.DataFrame) -> pd.DataFrame:
         outlier_mask = pd.Series([True] * len(racer_results), index=racer_results.index)
         
     final_mask = exclude_mask & parkrun_mask & outlier_mask
-    return racer_results[final_mask].reset_index(drop=True), racer_results[~final_mask].reset_index(drop=True)
+    racer_results['include'] =  final_mask

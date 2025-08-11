@@ -210,14 +210,14 @@ def plot_racer_likelihoods(racer_name: str = 'nick hamilton'):
     
     racer_results['outlier'] = identify_outliers_in_predictions(racer_results['Zpred_mu'], threshold=1.2)
         
-    racer_results, excluded_results = filter_race_results(racer_results)
+    filter_race_results(racer_results)
     
-    chase_mu, chase_sig = make_chase_prediction(racer_results, prediction_year=2024, verbose=True)
+    chase_mu, chase_sig = make_chase_prediction(racer_results.loc[racer_results['include']], prediction_year=2024, verbose=True)
     
     _, ax = plt.subplots(figsize=(10, 6))    
     
-    plot_racers_results(racer_results, con, ax=ax, linestyle='-')
-    plot_racers_results(excluded_results, con, ax=ax, linestyle=':')
+    plot_racers_results(racer_results.loc[racer_results['include']], con, ax=ax, linestyle='-')
+    plot_racers_results(racer_results.loc[~racer_results['include']], con, ax=ax, linestyle=':')
     plot_time_normal(con, chase_mu, chase_sig, 'Chase 2024',ax, color='black', linewidth=2)
     
     prediction = chase_mu - (1.96 * chase_sig)

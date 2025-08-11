@@ -20,7 +20,12 @@ def get_previous_chase_results(con: Connection, racer_id: int = None, racer_name
         pd.DataFrame: DataFrame containing previous chase results.
     """
     sql = """
-    SELECT C.Time, strftime('%Y', CH.Chase_Date) AS Season
+    SELECT 
+        C.Racer_ID,
+        "Hallam Chase" AS Race_Name,
+        C.Time,
+        C.ZScore_log AS Zpred_mu,
+        CAST(strftime('%Y', CH.Chase_Date) AS INTEGER) AS Season
     FROM Results_Chase AS C
     JOIN Chases AS CH ON C.Chase_ID = CH.Chase_ID
     WHERE C.Racer_ID = ?
