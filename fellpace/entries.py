@@ -1,6 +1,6 @@
 from fellpace.FellPace_tools import get_table_from_URL
 from fellpace.modelling.training import load_models
-from fellpace.modelling.prediction import get_racers_results, get_prediction_with_uncertainty_many, make_chase_prediction, get_prediction_from_parkrun_time
+from fellpace.modelling.prediction import get_racers_results, get_prediction_with_uncertainty_many, make_chase_prediction, get_prediction_time_from_parkrun_time, get_prediction_from_parkrun_time
 from fellpace.extract.racers import secure_racer_id
 from fellpace.analysis_tools import identify_outliers_in_predictions, convert_Chase_ZScore_logs_avg
 from fellpace.filter import filter_race_results
@@ -82,7 +82,7 @@ def prepare_chase_results_for_prediction(chase_results: pd.DataFrame, racer_name
     chase_results['Zpred_sig'] = 0.01  # Assuming very low uncertainty for chase results
     chase_results['ZScore'] = chase_results['Zpred_mu']  # ZScore is the same as Zpred_mu for chase results
     chase_results['Racer_Name'] = racer_name  # Assuming all chase results are for the same racer
-    chase_results[['Racer_ID', 'Racer_Name','Race_Name', 'Season', 'ZScore', 'Zpred_mu', 'Zpred_sig']]
+    return chase_results[['Racer_ID', 'Racer_Name','Race_Name', 'Season', 'ZScore', 'Zpred_mu', 'Zpred_sig']]
 
 def combine_results_with_chase_results(racer_results: pd.DataFrame, chase_results: pd.DataFrame) -> pd.DataFrame:
     """
@@ -132,9 +132,12 @@ def process_results_for_racer(con: Connection,coeffs, covar, racer_name: str = N
     
     if racer_results.empty:
         logger.warning(f"{racer_name} has not run in any valid races.")
-        # Assuming racer in DB due to running in the chase only. 
-        return prepare_chase_results_for_prediction(chase_results, racer_name), chase_results  
-    
+        # Assuming racer in DB due to running in the chase only. Always including chase results
+        return (
+            prepare_chase_results_for_prediction(chase_results, racer_name).assign(include=True),
+            chase_results
+            )
+
     racer_results_with_predictions = get_prediction_with_uncertainty_many(coeffs, covar, racer_results)
     
     if chase_results.empty:
@@ -145,6 +148,49 @@ def process_results_for_racer(con: Connection,coeffs, covar, racer_name: str = N
     all_results['outlier'] = identify_outliers_in_predictions(all_results['Zpred_mu'], threshold=1.2)
     filter_race_results(all_results)
     return all_results, chase_results
+
+def gather_results_for_entries(entries: pd.DataFrame, con: Connection, year_of_entry: int, with_parkrun: bool = False) -> pd.DataFrame:
+    
+    coeffs, covar = load_models()
+    all_racer_results = pd.DataFrame()
+    
+    for i, entry in entries.iterrows():
+        racer_name = entry['Name']
+        logger.info(f"Processing entry for {racer_name}")
+        
+        if with_parkrun:
+            PR_time = entry.get('PR_time', None)
+            if PR_time is not None:
+                pr_mean, pr_sig, pr_zscore = get_prediction_from_parkrun_time(con, PR_time, coeffs['PR_Endcliffe'], covar['PR_Endcliffe'])
+            else:
+                pr_mean = pr_sig = pr_zscore = None
+
+        racer_id, racer_name = secure_racer_id(con, racer_name.lower().strip())
+        racer_given_PR = pd.DataFrame(
+            {
+                'Racer_ID': racer_id,
+                'Racer_Name': racer_name,
+                'Race_Name': 'PR_given',
+                'Season': year_of_entry-1, # This is the last completed season compared to given Chase year
+                'ZScore': pr_zscore,
+                'Zpred_mu': pr_mean,
+                'Zpred_sig': pr_sig
+            }
+        )
+        if racer_id is None:
+            # Just put name in dataframe with given parkrun time if they have one.
+            logger.warning(f"Racer {racer_name} not found in database. Just adding given PR time.")
+            all_racer_results = pd.concat([all_racer_results, racer_given_PR], ignore_index=True)
+            continue
+        racer_results, chase_results = process_results_for_racer(con, coeffs, covar, racer_id = racer_id)
+        
+        all_racer_results = pd.concat([all_racer_results, racer_given_PR ,racer_results], ignore_index=True)
+        
+        if racer_results is None:
+            logger.warning(f"Racer {racer_name} has no valid results.")
+            continue
+
+    return all_racer_results
 
 def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, with_parkrun: bool = False, plot: bool = False) -> pd.DataFrame:
     """
@@ -168,13 +214,13 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
         if with_parkrun:
             PR_time = entry.get('PR_time', None)
             if PR_time is not None:
-                pr_prediction_t = get_prediction_from_parkrun_time(con, PR_time, coeffs['PR_Endcliffe'], covar['PR_Endcliffe'])
+                pr_prediction_t = get_prediction_time_from_parkrun_time(con, PR_time, coeffs['PR_Endcliffe'], covar['PR_Endcliffe'])
                 logger.info(f"PR time for {racer_name}: {seconds_to_time_string(pr_prediction_t)}")
                 pr_prediction_str = seconds_to_time_string(pr_prediction_t)
             else:
                 pr_prediction_str = "N/A"
         
-        racer_id = secure_racer_id(con, racer_name.lower().strip())        
+        racer_id, racer_name = secure_racer_id(con, racer_name.lower().strip())        
         if racer_id is None:
             logger.warning(f"Racer {racer_name} not found in database.")
             racer_results = None
@@ -218,7 +264,7 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
                     all_racer_predictions,
                     pd.DataFrame(
                         [{
-                            'Racer_Name': racer_name,
+                            'Racer_Name': racer_name.lower(),
                             'chase_mu': chase_mu,
                             'chase_sig': chase_sig
                         }]

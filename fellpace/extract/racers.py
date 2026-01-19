@@ -79,6 +79,19 @@ if __name__ == "__main__":
 
 
 def secure_racer_id(con, racer_name: str):
+    """Securely retrieve the racer ID from the database, prompting the user if necessary.
+    
+    If the name is not found, it will search for similar names and allow the user to select one.
+    The function returns the original or updated name if necessary.
+
+    Args:
+        con (Connection): Database connection object.
+        racer_name (str): Name of the racer.
+
+    Returns:
+        Tuple[int, str]: A tuple containing the racer ID and name.
+    """
+
     racer_id = find_racer_ID(con, name = racer_name)
     if racer_id is None:
         logger.warning(f"Racer {racer_name} not found in database.")
@@ -86,13 +99,14 @@ def secure_racer_id(con, racer_name: str):
         names = find_similar_name(con, name = racer_name)
         if names.empty:
             logger.info("No similar names found.")
-            return
+            return None, None
         for i, row in names.iterrows():
             logger.info(f"{i}: {row['Racer_Name']}")
         logger.info(f"{i+1}: None of these are correct")
         selected_index = int(input("Select the number of the name you want to use: "))
         if selected_index == i+1:
             logger.info("No name selected, exiting.")
-            return
+            return None, None
+        racer_name = names.iloc[selected_index]['Racer_Name']
         racer_id = names.iloc[selected_index]['Racer_ID']
-    return racer_id
+    return racer_id, racer_name

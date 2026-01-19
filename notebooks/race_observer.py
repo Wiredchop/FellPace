@@ -105,7 +105,7 @@ def _(mo, racer_results_all):
         value = sorted_names[0],
         label = "Choose racer to examine"
     )
-    
+
     return (dropdown_racer_name,)
 
 
@@ -136,9 +136,11 @@ def _(racer_name, racer_predictions_all):
 
 
 @app.cell
-def _(con, convert_Chase_ZScore_logs_avg, mu, sig):
+def _(con, convert_Chase_ZScore_logs_avg, mu, racer_predictions_all, sig):
     prediction = mu - 1.96 * sig
     prediction_t = convert_Chase_ZScore_logs_avg(con=con, Zscore_logs=prediction)
+    racer_predictions_all
+
     return (prediction_t,)
 
 
@@ -153,7 +155,8 @@ def _(
     sig,
     year_of_entry,
 ):
-    f =plot_racer_entry(
+    import matplotlib.pyplot as plt
+    plot_racer_entry(
         con=con,
         racer_results=racer_results,
         chase_mu= mu,
@@ -162,7 +165,7 @@ def _(
         racer_name=racer_name,
         prediction_year=year_of_entry
     )
-    f
+    plt.gcf()
     return
 
 

@@ -134,6 +134,32 @@ def get_probability_distribution(mean, std_dev, a = -3, b = 3, step=0.01):
 
 
 def get_prediction_from_parkrun_time(con, parkrun_time: str, coeffs: pd.DataFrame, cov_matrices: Dict[str, np.ndarray]) -> pd.DataFrame:
+    """Get the predicted Zscore with uncertainty from a given parkrun time. This function does NOT convert to seconds.
+
+    Args:
+        con (dbconnection): Database connection.
+        parkrun_time (str): The parkrun time in HH:MM:SS format.
+        coeffs (pd.DataFrame): Coefficients for the prediction model.
+        cov_matrices (Dict[str, np.ndarray]): Covariance matrices for the prediction model.
+
+    Returns:
+        pd.DataFrame: DataFrame with predicted Zscore and uncertainty.
+    """
+
+    # Convert parkrun time to seconds
+    parkrun_seconds = sum(int(x) * 60 ** i for i, x in enumerate(reversed(parkrun_time.split(':'))))
+
+    log_seconds = np.log(parkrun_seconds)
+
+    stats = parkrun_mean_std(con, season = (date.today().year)-1)
+
+    z_score = ((log_seconds - stats['Mean']) / stats['StdDev']).squeeze()
+
+    mean, std = get_prediction_with_uncertainty(coeffs, cov_matrices, z_score)
+
+    return mean, std, z_score
+
+def get_prediction_time_from_parkrun_time(con, parkrun_time: str, coeffs: pd.DataFrame, cov_matrices: Dict[str, np.ndarray]) -> pd.DataFrame:
     """
     Get the predicted times based on a parkrun time.
     
@@ -170,4 +196,4 @@ if __name__ == "__main__":
     from fellpace.modelling.training import load_models
     con = setup_db(DB_PATH)
     coeffs, covars = load_models()
-    get_prediction_from_parkrun_time(con, "23:30", coeffs, covars)
+    get_prediction_time_from_parkrun_time(con, "23:30", coeffs, covars)
