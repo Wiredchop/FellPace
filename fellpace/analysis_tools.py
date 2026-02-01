@@ -105,22 +105,26 @@ def remove_outliers_xy(data: pd.DataFrame,x: str, y: str,g:str, thresh: float = 
     #Strip out records where Z is above 2.5
     return data.loc[abs(data["ZoCZ"]) <=thresh],data["ZoCZ"] ,np.where(abs(data["ZoCZ"])<=thresh,"Included","Cleaned")
 
-def convert_Chase_ZScore_logs(con: sqlite3.Connection,Zscore_logs: pd.Series, year: int):
-    
-    # Add logarithm to the sqllite connection
-
-    def ln(t):
-        return np.log(t)
-    con.create_function("ln", 1, ln)
-
+def convert_Chase_ZScore_logs(con: sqlite3.Connection, Zscore_logs: pd.Series, year: int, apply_smear: bool = True):
     """This function extracts raw stats from the original Chase data in order to convert back Zscore log data.
     
 
     Args:
-        con (sqlite3.Connection): A connection to the fellpace database. MUST HAVE sttdev ADDED!!
+        con (sqlite3.Connection): A connection to the fellpace database. MUST HAVE stddev ADDED!!
         Zscore_logs (pd.Series): A series of Zscore_log values to be converted into expected times
         year (int): We also need the year of the chase for which the times need converting
+        apply_smear (bool): Whether to apply Duan's smearing factor to correct for back-transformation bias.
+                           Default is True. The smearing factor corrects for the bias introduced by 
+                           exp(mean(log(x))) != mean(x) due to Jensen's inequality.
+    
+    Returns:
+        np.ndarray: Expected times based on ZScore values, corrected with smearing factor if apply_smear=True
     """
+    
+    # Add logarithm to the sqlite connection
+    def ln(t):
+        return np.log(t)
+    con.create_function("ln", 1, ln)
     
     SQL_get_log_chase_stats = '''
         WITH Timel AS
@@ -144,11 +148,37 @@ def convert_Chase_ZScore_logs(con: sqlite3.Connection,Zscore_logs: pd.Series, ye
     '''
     year = int(year)
     # Ensure the year is an integer, np int type doesn't work with sqlite3
-    Chase_stats = pd.read_sql(SQL_get_log_chase_stats,con,params=(year,))
+    Chase_stats = pd.read_sql(SQL_get_log_chase_stats, con, params=(year,))
     pred_logs = Chase_stats['mn'].values + Chase_stats['sd'].values * Zscore_logs
-    return np.exp(pred_logs)
     
-def convert_Chase_ZScore_logs_avg(con: sqlite3.Connection,Zscore_logs: pd.Series):
+    # Apply smearing factor to correct for back-transformation bias
+    if apply_smear:
+        # Calculate smearing factor from the same year's data
+        SQL_smear = '''
+            SELECT R.Time, ln(R.Time) as Timel
+            FROM Results_Chase as R
+            JOIN Chases as C ON C.Chase_ID = R.Chase_ID
+            WHERE R.Time IS NOT NULL
+                AND cast(strftime("%Y",C.Chase_Date) as integer) == ?
+        '''
+        smear_data = pd.read_sql(SQL_smear, con, params=(year,))
+        
+        if len(smear_data) > 0:
+            mean_log = smear_data['Timel'].mean()
+            
+            # Smearing factor = mean(exp(log(Time) - mean(log(Time))))
+            # This corrects exp(mean(log)) to approximate mean(Time)
+            smear_factor = np.mean(np.exp(smear_data['Timel'] - mean_log))
+            
+            return np.exp(pred_logs) * smear_factor
+        else:
+            # If no data for this year, fall back to no smearing
+            logger.warning(f"No data available for year {year} to calculate smearing factor. Using unsmeared values.")
+            return np.exp(pred_logs)
+    else:
+        return np.exp(pred_logs)
+    
+def convert_Chase_ZScore_logs_avg(con: sqlite3.Connection, Zscore_logs: pd.Series, apply_smear: bool = True):
     """This does the same as the previous function but does not require a year input. When predicting
     times, we will not have that year's HC results and so an average of all available data must be taken
 
@@ -156,29 +186,23 @@ def convert_Chase_ZScore_logs_avg(con: sqlite3.Connection,Zscore_logs: pd.Series
         con (sqlite3.Connection): A connection to a database -- A standard deviation function 'stddev'
         must be included
         Zscore_logs (pd.Series): A series of ZScores
+        apply_smear (bool): Whether to apply Duan's smearing factor to correct for back-transformation bias.
+                           Default is True. The smearing factor corrects for the bias introduced by 
+                           exp(mean(log(x))) != mean(x) due to Jensen's inequality.
 
     Returns:
-        _type_: Expected times based on ZScore values
+        np.ndarray: Expected times based on ZScore values, corrected with smearing factor if apply_smear=True
     """
     # Add logarithm to the sqllite connection
 
     def ln(t):
         return np.log(t)
     con.create_function("ln", 1, ln)
-
-    """This function extracts raw stats from the original Chase data in order to convert back Zscore log data.
-    
-
-    Args:
-        con (sqlite3.Connection): A connection to the fellpace database. MUST HAVE sttdev ADDED!!
-        Zscore_logs (pd.Series): A series of Zscore_log values to be converted into expected times
-        year (int): We also need the year of the chase for which the times need converting
-    """
     
     SQL_get_log_chase_stats = '''
         WITH Timel AS
         (
-            SELECT *, ln(Time) Timel
+            SELECT Chase_ID, Time, ln(Time) Timel
             FROM Results_Chase
             WHERE Time IS NOT NULL
         ),
@@ -190,10 +214,28 @@ def convert_Chase_ZScore_logs_avg(con: sqlite3.Connection,Zscore_logs: pd.Series
             GROUP BY Chase_ID
         )
         
-
-        SELECT  avg(R.sd) as sd, avg(R.mn) as mn FROM sds as R
+        SELECT avg(R.sd) as sd, avg(R.mn) as mn FROM sds as R
     '''
     
-    Chase_stats = pd.read_sql(SQL_get_log_chase_stats,con)
+    Chase_stats = pd.read_sql(SQL_get_log_chase_stats, con)
     pred_logs = Chase_stats['mn'].values + Chase_stats['sd'].values * Zscore_logs
-    return np.exp(pred_logs)
+    
+    # Apply smearing factor to correct for back-transformation bias
+    if apply_smear:
+        # Calculate smearing factor: E[exp(residuals)] where residuals are in log space
+        # This is equivalent to: mean(actual_time) / exp(mean(log(actual_time)))
+        SQL_smear = '''
+            SELECT Time, ln(Time) as Timel
+            FROM Results_Chase
+            WHERE Time IS NOT NULL
+        '''
+        smear_data = pd.read_sql(SQL_smear, con)
+        mean_log = smear_data['Timel'].mean()
+        
+        # Smearing factor = mean(exp(log(Time) - mean(log(Time))))
+        # This corrects exp(mean(log)) to approximate mean(Time)
+        smear_factor = np.mean(np.exp(smear_data['Timel'] - mean_log))
+        
+        return np.exp(pred_logs) * smear_factor
+    else:
+        return np.exp(pred_logs)

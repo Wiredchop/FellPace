@@ -15,3 +15,6 @@ COVAR_FILE_PATH = MODELS_PATH / "covars.json"
 
 # Race results
 EXCLUDE_LIST = ['Exterminator']
+
+# Race details
+START_TIME = "19:30:00"

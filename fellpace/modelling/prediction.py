@@ -159,13 +159,14 @@ def get_prediction_from_parkrun_time(con, parkrun_time: str, coeffs: pd.DataFram
 
     return mean, std, z_score
 
-def get_prediction_time_from_parkrun_time(con, parkrun_time: str, coeffs: pd.DataFrame, cov_matrices: Dict[str, np.ndarray]) -> pd.DataFrame:
+def get_prediction_time_from_parkrun_time(con, parkrun_time: str, prediction_year: int, coeffs: pd.DataFrame, cov_matrices: Dict[str, np.ndarray]) -> pd.DataFrame:
     """
     Get the predicted times based on a parkrun time.
     
     Args:
         con: Database connection.
         parkrun_time (str): The parkrun time in HH:MM:SS format.
+        prediction_year (int): The year for which the prediction is made.
         coeffs (pd.DataFrame): Coefficients for the prediction model.
         cov_matrices (Dict[str, np.ndarray]): Covariance matrices for the prediction model.
         
@@ -177,7 +178,7 @@ def get_prediction_time_from_parkrun_time(con, parkrun_time: str, coeffs: pd.Dat
     
     log_seconds = np.log(parkrun_seconds)
     
-    stats = parkrun_mean_std(con, season = (date.today().year)-1)
+    stats = parkrun_mean_std(con, season = prediction_year-1)
     
     z_score = ((log_seconds - stats['Mean']) / stats['StdDev']).squeeze()
     

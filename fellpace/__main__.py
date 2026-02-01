@@ -27,7 +27,8 @@ from fellpace.db.db_setup import setup_db
 from fellpace.convert_tools import seconds_to_time_string
 from fellpace.scrape_chase import process_chase_csv
 
-from fellpace.entries import load_entries, process_entries
+from fellpace.entries import load_entries, process_entries, load_PR_entries, process_PR_entries, export_entries_to_csv
+from fellpace.handicaps import calculate_handicaps_for_entries
 from fellpace.filter import filter_race_results
 from fellpace.plotting.racetimes import plot_racers_results
 from loguru import logger
@@ -243,10 +244,19 @@ def process_chase(file: str, date: str):
     con.close()
     
 @app.command()
-def entries():
+def entries(
+    year: int = date.today().year,
+    use_parkrun: bool = Option(True, "--use-parkrun", "-p", help="Whether to use parkrun data")
+):
     con = setup_db(DB_PATH)
-    entries = load_entries()
-    process_entries(entries, con)
+    if use_parkrun:
+        entries = load_PR_entries(year_of_entry=year)
+        entries = process_PR_entries(entries, con, year)
+    else:
+        entries = load_entries(year_of_entry=year)
+    processed_entries = process_entries(entries, con, year, with_parkrun=use_parkrun)
+    processed_entries = calculate_handicaps_for_entries(processed_entries)
+    export_entries_to_csv(processed_entries, year_of_entry=year)
 
 if __name__ == "__main__":
     app()

@@ -48,7 +48,7 @@ def extract_result_for_year(results: pd.DataFrame, year: int) -> pd.DataFrame:
         results (pd.DataFrame): Data
         """
     
-    chase_time = results.loc[results['Season'] == str(year), "Time"].squeeze()
+    chase_time = results.loc[results['Season'] == year, "Time"].squeeze()
     
     if type(chase_time) == pd.Series:
         chase_time = "N/A"

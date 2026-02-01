@@ -25,6 +25,7 @@ dependencies = [
     "loguru>=0.7.3",
     "marimo>=0.14.16",
     "pyarrow>=21.0.0",
+    "selenium>=4.36.0",
 ]
 
  [tool.setuptools] 

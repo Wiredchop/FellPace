@@ -206,19 +206,18 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
     processed_entries = pd.DataFrame()
     all_racer_results = pd.DataFrame()
     all_racer_predictions = pd.DataFrame()
-    this_year = date.today().year
+    this_year = year_of_entry
     for i, entry in entries.iterrows():
         racer_name = entry['Name']
         logger.info(f"Processing entry for {racer_name}")
         
+        pr_prediction_str = "N/A"
         if with_parkrun:
             PR_time = entry.get('PR_time', None)
             if PR_time is not None:
-                pr_prediction_t = get_prediction_time_from_parkrun_time(con, PR_time, coeffs['PR_Endcliffe'], covar['PR_Endcliffe'])
+                pr_prediction_t = get_prediction_time_from_parkrun_time(con, PR_time,year_of_entry, coeffs['PR_Endcliffe'], covar['PR_Endcliffe'])
                 logger.info(f"PR time for {racer_name}: {seconds_to_time_string(pr_prediction_t)}")
                 pr_prediction_str = seconds_to_time_string(pr_prediction_t)
-            else:
-                pr_prediction_str = "N/A"
         
         racer_id, racer_name = secure_racer_id(con, racer_name.lower().strip())        
         if racer_id is None:
@@ -229,7 +228,7 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
         else:
 
             racer_results, chase_results = process_results_for_racer(con, coeffs, covar, racer_id = racer_id)
-        
+            racer_results, chase_results = limit_results_to_requested_years(racer_results, chase_results, year_of_entry)
         if racer_results is None:
             logger.warning(f"Creating blank entry for {racer_name} as racer not found.")
             entry_series = pd.Series({
@@ -278,14 +277,13 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
 
         # Create a series for this racer's entry
         # Add last three years of chase results too
-        
-        
         entry_series = pd.Series({
             'Name': racer_name,
             'Num_results_used': len(racer_results.loc[racer_results['include']]),
             'Num_excluded_results': len(racer_results.loc[~racer_results['include']]),
             'Predicted_Time': prediction_str,
-            'Given PR time': pr_prediction_str,
+            'Given PR prediction': pr_prediction_str,
+            'Predicted_Time_seconds': prediction_t if racer_results is not None else None,
             f'Chase {this_year-1}': extract_result_for_year(chase_results, this_year - 1),
             f'Chase {this_year-2}': extract_result_for_year(chase_results, this_year - 2),
             f'Chase {this_year-3}': extract_result_for_year(chase_results, this_year - 3),
@@ -295,14 +293,43 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
         
 
     logger.info(f"Processed entries:\n {tabulate(processed_entries, headers='keys', tablefmt='rounded_outline')}")
-    entries_filepath = ENTRIES_PATH / f"processed_entries_{year_of_entry}.csv"
     results_filepath = ENTRIES_PATH / f"racer_results_{year_of_entry}.json"
     predictions_filepath = ENTRIES_PATH / f"racer_predictions_{year_of_entry}.json"
     
-    processed_entries.to_csv(entries_filepath, index=False)
+    
     all_racer_results.to_json(results_filepath, index=False, indent=4)
     all_racer_predictions.to_json(predictions_filepath, index=False, indent=4)
     return processed_entries
+
+
+def export_entries_to_csv(processed_entries: pd.DataFrame, year_of_entry: int):
+    """Export procssed entries to a csv file, denominated by year of entry.
+
+    Args:
+        processed_entries (pd.DataFrame): The processed entries dataframe
+        year_of_entry (int): The year of entry
+    """
+    entries_filepath = ENTRIES_PATH / f"processed_entries_{year_of_entry}.csv"
+    processed_entries.to_csv(entries_filepath, index=False)
+    
+ 
+def limit_results_to_requested_years(racer_results: pd.DataFrame, chase_results: pd.DataFrame, year_of_entry: int)-> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Limit racer results and chase results to only those before the requested year.
+    
+    Args:
+        racer_results (pd.DataFrame): DataFrame containing the racer's results.
+        chase_results (pd.DataFrame): DataFrame containing the chase results.
+        year_of_entry (int): Year of the entry.
+        
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: A tuple containing:
+            - pd.DataFrame: The limited racer's results.
+            - pd.DataFrame: The limited chase results.
+    """
+    limited_racer_results = racer_results[racer_results['Season'] < year_of_entry].reset_index(drop=True)
+    limited_chase_results = chase_results[chase_results['Season'] < year_of_entry].reset_index(drop=True)
+    return limited_racer_results, limited_chase_results
   
 def clean_pr_time_column(df, time_col='PR_time', new_col='PR_time_clean'):
     """
