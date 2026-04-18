@@ -1,6 +1,6 @@
 from fellpace.FellPace_tools import get_table_from_URL
-from fellpace.modelling.training import load_models
-from fellpace.modelling.prediction import get_racers_results, get_prediction_with_uncertainty_many, make_chase_prediction, get_prediction_time_from_parkrun_time, get_prediction_from_parkrun_time
+from fellpace.modelling.training import load_models, load_time_models
+from fellpace.modelling.prediction import get_racers_results, get_chase_z_from_time, get_prediction_with_uncertainty_many, make_chase_prediction, get_prediction_time_from_parkrun_time, get_prediction_from_parkrun_time
 from fellpace.extract.racers import secure_racer_id
 from fellpace.analysis_tools import identify_outliers_in_predictions, convert_Chase_ZScore_logs_avg
 from fellpace.filter import filter_race_results
@@ -69,45 +69,62 @@ def load_PR_entries(year_of_entry: int = date.today().year):
     
     return data
 
-def prepare_chase_results_for_prediction(chase_results: pd.DataFrame, racer_name: str) -> pd.DataFrame:
+def prepare_chase_results_for_prediction(chase_results: pd.DataFrame, racer_name: str, con, time_coeffs) -> pd.DataFrame:
     """
     Prepare chase results for prediction.
-    
-    Args:
-        chase_results (pd.DataFrame): DataFrame containing chase results.
-        
-    Returns:
-        pd.DataFrame: Prepared DataFrame with necessary columns.
-    """
-    chase_results['Zpred_sig'] = 0.01  # Assuming very low uncertainty for chase results
-    chase_results['ZScore'] = chase_results['Zpred_mu']  # ZScore is the same as Zpred_mu for chase results
-    chase_results['Racer_Name'] = racer_name  # Assuming all chase results are for the same racer
-    return chase_results[['Racer_ID', 'Racer_Name','Race_Name', 'Season', 'ZScore', 'Zpred_mu', 'Zpred_sig']]
 
-def combine_results_with_chase_results(racer_results: pd.DataFrame, chase_results: pd.DataFrame) -> pd.DataFrame:
+    Converts each previous Chase finishing time into a z-score prediction and
+    uncertainty using the delta method via get_chase_z_from_time. This gives
+    the same (Zpred_mu, Zpred_sig) structure as road race predictions so that
+    all inputs to the Bayesian combiner are on an equal footing.
+
+    Args:
+        chase_results: DataFrame from get_previous_chase_results(), must contain
+                       'Time' (seconds) and 'Racer_ID' columns.
+        racer_name:    Name of the racer, added as 'Racer_Name' column.
+        con:           Active SQLite connection (for Chase log stats in delta method).
+        time_coeffs:   Loaded time models from load_time_models().
+
+    Returns:
+        pd.DataFrame with columns:
+            Racer_ID, Racer_Name, Race_Name, Season, ZScore, Zpred_mu, Zpred_sig
+    """
+    zpred = chase_results['Time'].apply(
+        lambda t: get_chase_z_from_time(t, 'previous_chase', time_coeffs, con)
+    )
+    chase_results = chase_results.copy()
+    chase_results['Zpred_mu'] = zpred.apply(lambda x: x[0])
+    chase_results['Zpred_sig'] = zpred.apply(lambda x: x[1])
+    chase_results['ZScore'] = chase_results['Zpred_mu']
+    chase_results['Racer_Name'] = racer_name
+    return chase_results[['Racer_ID', 'Racer_Name', 'Race_Name', 'Season', 'ZScore', 'Zpred_mu', 'Zpred_sig']]
+
+def combine_results_with_chase_results(racer_results: pd.DataFrame, chase_results: pd.DataFrame, con, time_coeffs) -> pd.DataFrame:
     """
     Combine racer results with chase results.
-    
-    Make assumptions of a very low uncertainty for the chase results as it's a recorded time.
-    
+
+    Previous Chase results are converted to z-score predictions using the
+    time-domain delta method, giving realistic uncertainty rather than the
+    former hardcoded near-zero value.
+
     Args:
         racer_results (pd.DataFrame): DataFrame containing the racer's results.
         chase_results (pd.DataFrame): DataFrame containing the chase results.
-        
+        con:           Active SQLite connection (passed through to delta method).
+        time_coeffs:   Loaded time models from load_time_models().
+
     Returns:
         pd.DataFrame: Combined DataFrame with both racer and chase results.
     """
-    
-    prepared_chase_results = prepare_chase_results_for_prediction(chase_results, racer_name=racer_results['Racer_Name'].iloc[0])
-    
-    return pd.concat(
-        [
-            racer_results,
-            prepared_chase_results
-        ],
-        ignore_index=True)
+    prepared_chase_results = prepare_chase_results_for_prediction(
+        chase_results,
+        racer_name=racer_results['Racer_Name'].iloc[0],
+        con=con,
+        time_coeffs=time_coeffs,
+    )
+    return pd.concat([racer_results, prepared_chase_results], ignore_index=True)
 
-def process_results_for_racer(con: Connection,coeffs, covar, racer_name: str = None, racer_id = None) -> pd.DataFrame:
+def process_results_for_racer(con: Connection,coeffs, covar, resid_stds: pd.Series = None, racer_name: str = None, racer_id = None) -> pd.DataFrame:
     """
     Process results for a single racer to separate them into results to use in prediction and excluded results.
     
@@ -126,7 +143,11 @@ def process_results_for_racer(con: Connection,coeffs, covar, racer_name: str = N
     """
     assert (racer_id is not None) ^ (racer_name is not None), "Provide either racer_id or racer_name, not both."
     if racer_name:
-        racer_id = secure_racer_id(con, racer_name.lower().strip())
+        racer_id, racer_name = secure_racer_id(con, racer_name.lower().strip())
+    if racer_id is None:
+        logger.warning(f"Racer {racer_name} not found in database.")
+        return pd.DataFrame(), pd.DataFrame()
+    time_coeffs = load_time_models()
     chase_results = get_previous_chase_results(con, racer_id)
     racer_results = get_racers_results(con, racer_id)
     
@@ -134,24 +155,24 @@ def process_results_for_racer(con: Connection,coeffs, covar, racer_name: str = N
         logger.warning(f"{racer_name} has not run in any valid races.")
         # Assuming racer in DB due to running in the chase only. Always including chase results
         return (
-            prepare_chase_results_for_prediction(chase_results, racer_name).assign(include=True),
+            prepare_chase_results_for_prediction(chase_results, racer_name, con=con, time_coeffs=time_coeffs).assign(include=True),
             chase_results
             )
 
-    racer_results_with_predictions = get_prediction_with_uncertainty_many(coeffs, covar, racer_results)
+    racer_results_with_predictions = get_prediction_with_uncertainty_many(coeffs, covar, racer_results, residual_stds=resid_stds)
     
     if chase_results.empty:
         logger.warning(f"{racer_name} has no chase results.")
         all_results = racer_results_with_predictions
     else:
-        all_results = combine_results_with_chase_results(racer_results_with_predictions, chase_results)
+        all_results = combine_results_with_chase_results(racer_results_with_predictions, chase_results, con=con, time_coeffs=time_coeffs)
     all_results['outlier'] = identify_outliers_in_predictions(all_results['Zpred_mu'], threshold=1.2)
     filter_race_results(all_results)
     return all_results, chase_results
 
 def gather_results_for_entries(entries: pd.DataFrame, con: Connection, year_of_entry: int, with_parkrun: bool = False) -> pd.DataFrame:
     
-    coeffs, covar = load_models()
+    coeffs, covar, resid_stds = load_models(include_residuals=True)
     all_racer_results = pd.DataFrame()
     
     for i, entry in entries.iterrows():
@@ -161,7 +182,13 @@ def gather_results_for_entries(entries: pd.DataFrame, con: Connection, year_of_e
         if with_parkrun:
             PR_time = entry.get('PR_time', None)
             if PR_time is not None:
-                pr_mean, pr_sig, pr_zscore = get_prediction_from_parkrun_time(con, PR_time, coeffs['PR_Endcliffe'], covar['PR_Endcliffe'])
+                pr_mean, pr_sig, pr_zscore = get_prediction_from_parkrun_time(
+                    con,
+                    PR_time,
+                    coeffs['PR_Endcliffe'],
+                    covar['PR_Endcliffe'],
+                    residual_std=float(resid_stds.get('PR_Endcliffe', 0.0)),
+                )
             else:
                 pr_mean = pr_sig = pr_zscore = None
 
@@ -182,7 +209,7 @@ def gather_results_for_entries(entries: pd.DataFrame, con: Connection, year_of_e
             logger.warning(f"Racer {racer_name} not found in database. Just adding given PR time.")
             all_racer_results = pd.concat([all_racer_results, racer_given_PR], ignore_index=True)
             continue
-        racer_results, chase_results = process_results_for_racer(con, coeffs, covar, racer_id = racer_id)
+        racer_results, chase_results = process_results_for_racer(con, coeffs, covar, resid_stds=resid_stds, racer_id = racer_id)
         
         all_racer_results = pd.concat([all_racer_results, racer_given_PR ,racer_results], ignore_index=True)
         
@@ -202,7 +229,7 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
     Returns:
         pd.DataFrame: Processed DataFrame with necessary columns.
     """
-    coeffs, covar = load_models()
+    coeffs, covar, resid_stds = load_models(include_residuals=True)
     processed_entries = pd.DataFrame()
     all_racer_results = pd.DataFrame()
     all_racer_predictions = pd.DataFrame()
@@ -215,7 +242,14 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
         if with_parkrun:
             PR_time = entry.get('PR_time', None)
             if PR_time is not None:
-                pr_prediction_t = get_prediction_time_from_parkrun_time(con, PR_time,year_of_entry, coeffs['PR_Endcliffe'], covar['PR_Endcliffe'])
+                pr_prediction_t = get_prediction_time_from_parkrun_time(
+                    con,
+                    PR_time,
+                    year_of_entry,
+                    coeffs['PR_Endcliffe'],
+                    covar['PR_Endcliffe'],
+                    residual_std=float(resid_stds.get('PR_Endcliffe', 0.0)),
+                )
                 logger.info(f"PR time for {racer_name}: {seconds_to_time_string(pr_prediction_t)}")
                 pr_prediction_str = seconds_to_time_string(pr_prediction_t)
         
@@ -227,7 +261,7 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
             chase_results = None
         else:
 
-            racer_results, chase_results = process_results_for_racer(con, coeffs, covar, racer_id = racer_id)
+            racer_results, chase_results = process_results_for_racer(con, coeffs, covar, resid_stds=resid_stds, racer_id = racer_id)
             racer_results, chase_results = limit_results_to_requested_years(racer_results, chase_results, year_of_entry)
         if racer_results is None:
             logger.warning(f"Creating blank entry for {racer_name} as racer not found.")

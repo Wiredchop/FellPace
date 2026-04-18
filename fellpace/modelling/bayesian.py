@@ -47,47 +47,86 @@ def calculate_recency_weights(year_to_predict: int, season: np.ndarray, initial_
     return initial_weights * np.exp(-lambda_decay * time_since_race)
 
 
-def recency_weighted_bayesian(prior_mu, prior_sigma, observed_mu, observed_sigma, weights, race_names = None, lambda_decay=0.25):
+def recency_weighted_bayesian(prior_mu, prior_sigma, observed_mu, observed_sigma, weights, race_names = None):
     """
     Compute the posterior mean and standard deviation using a recency-weighted Bayesian approach.
+
+    Uses overdispersion scaling to inflate the posterior variance when observed predictions
+    disagree more than their individual uncertainties would suggest. This is a multiplicative
+    correction (like quasi-likelihood) rather than an additive one, so it only inflates
+    uncertainty when the data genuinely conflicts.
+
+    Args:
+        prior_mu: Prior mean (e.g. population average).
+        prior_sigma: Prior standard deviation.
+        observed_mu: Array of observed prediction means.
+        observed_sigma: Array of observed prediction standard deviations.
+        weights: Recency weights for each observation.
+        race_names: Optional array of race names for logging.
+
+    Returns:
+        (posterior_mu, posterior_sigma): Posterior mean and standard deviation.
     """
 
     precisions = weights / (observed_sigma ** 2)
     prior_precision = 1 / (prior_sigma ** 2)
+
     if race_names is not None:
         table_data = list(zip(race_names, weights))
         headers = ["Race Name", "Weight"]
         print(tabulate(table_data, headers=headers, tablefmt="rounded_outline"))
 
-    # Adjust dispersion variance to account for race weights based on observed_mu values
-    normalised_weights = weights / np.sum(weights)
-    
-    weighted_variances = normalised_weights * ((observed_mu - np.mean(observed_mu)) ** 2)
-    dispersion_variance = np.sum(weighted_variances)   # Weighted variance based on observed_mu
+    # Standard Bayesian combination
+    total_precision = np.sum(precisions) + prior_precision
+    posterior_mu = (np.sum(precisions * observed_mu) + prior_precision * prior_mu) / total_precision
+    naive_posterior_variance = 1 / total_precision
 
-    posterior_mu = (np.sum(precisions * observed_mu) + prior_precision * prior_mu) / (np.sum(precisions) + prior_precision)
-    # Adjust posterior variance calculation to scale dispersion variance
-    posterior_variance = 1 / (np.sum(precisions) + prior_precision) + (dispersion_variance/2)
+    # Overdispersion: inflate variance if observations scatter more than expected
+    n = len(observed_mu)
+    if n > 1:
+        chi_sq = np.sum(precisions * (observed_mu - posterior_mu) ** 2)
+        dof = n - 1
+        overdispersion_factor = max(1.0, chi_sq / dof)
+    else:
+        overdispersion_factor = 1.0
+
+    posterior_variance = naive_posterior_variance * overdispersion_factor
     posterior_sigma = np.sqrt(posterior_variance)
+
+    logger.debug(f"Overdispersion factor: {overdispersion_factor:.3f}")
 
     return posterior_mu, posterior_sigma
 
 def hierarchical_bayesian_model(global_race_mu, global_race_sigma, observed_times, observed_race_variability, time_since_race, lambda_decay = 0.1):
     """
     Compute the posterior mean and standard deviation using a hierarchical Bayesian model.
+    
+    Two-level hierarchy:
+        1. Race-level: combines observed race means with a global prior, weighted by recency.
+        2. Runner-level: combines the race-level posterior with the individual observations.
+    
+    Args:
+        global_race_mu: Global prior mean for race times.
+        global_race_sigma: Global prior standard deviation.
+        observed_times: Array of observed race times.
+        observed_race_variability: Array of per-race standard deviations.
+        time_since_race: Array of years since each race.
+        lambda_decay: Exponential decay rate for recency weighting.
+    
+    Returns:
+        (runner_posterior_mean, runner_posterior_sigma): Posterior mean and standard deviation.
     """
-    race_means = observed_times + np.random.normal(0, observed_race_variability)
-    # Define exponential decay weights for recency
-    lambda_decay = 0.1  # Controls how fast older races lose importance
     recency_weights = np.exp(-lambda_decay * time_since_race)
 
     # Scale race-specific precision by recency weight
-    race_precisions = (recency_weights / (observed_race_variability ** 2))
-    
+    race_precisions = recency_weights / (observed_race_variability ** 2)
+    global_precision = 1 / (global_race_sigma ** 2)
 
-    race_mean_posterior = (np.sum(race_precisions * race_means) + (1 / global_race_sigma**2) * global_race_mu) / (np.sum(race_precisions) + (1 / global_race_sigma**2))
-    race_sigma_posterior = np.sqrt(1 / (np.sum(race_precisions) + (1 / global_race_sigma**2)))
+    # Race-level posterior
+    race_mean_posterior = (np.sum(race_precisions * observed_times) + global_precision * global_race_mu) / (np.sum(race_precisions) + global_precision)
+    race_sigma_posterior = np.sqrt(1 / (np.sum(race_precisions) + global_precision))
 
+    # Runner-level posterior
     runner_precision = 1 / (race_sigma_posterior ** 2)
     runner_posterior_mean = (np.sum(race_precisions * observed_times) + runner_precision * race_mean_posterior) / (np.sum(race_precisions) + runner_precision)
     runner_posterior_sigma = np.sqrt(1 / (np.sum(race_precisions) + runner_precision))
@@ -102,10 +141,16 @@ if __name__ == "__main__":
     prior_sigma = 20
     observed_mu = np.array([305, 290, 355])
     observed_sigma = np.array([15, 18, 12])
-    time_since_race = np.array([1, 5, 10])
+    year_to_predict = 2026
+    season = np.array([2025, 2021, 2016])
+    initial_weights = np.array([1.0, 1.0, 1.0])
     lambda_decay = 0.1
 
-    posterior_mu, posterior_sigma = recency_weighted_bayesian(prior_mu, prior_sigma, observed_mu, observed_sigma, time_since_race, lambda_decay)
+    weights = calculate_recency_weights(year_to_predict, season, initial_weights, lambda_decay)
+    posterior_mu, posterior_sigma = recency_weighted_bayesian(
+        prior_mu, prior_sigma, observed_mu, observed_sigma, weights,
+        race_names=["Race A", "Race B", "Race C"]
+    )
     print(f"Posterior Mean (Recency-Weighted): {posterior_mu:.2f} seconds")
     print(f"Posterior Standard Deviation: {posterior_sigma:.2f} seconds")
 
@@ -116,6 +161,8 @@ if __name__ == "__main__":
     observed_race_variability = np.array([15, 18, 12])
     time_since_race = np.array([1, 5, 19])
 
-    runner_posterior_mean, runner_posterior_sigma = hierarchical_bayesian_model(global_race_mu, global_race_sigma, observed_times, observed_race_variability, time_since_race)
+    runner_posterior_mean, runner_posterior_sigma = hierarchical_bayesian_model(
+        global_race_mu, global_race_sigma, observed_times, observed_race_variability, time_since_race
+    )
     print(f"Final Runner-Specific Posterior Mean: {runner_posterior_mean:.2f} seconds")
     print(f"Final Runner-Specific Std Dev: {runner_posterior_sigma:.2f} seconds")

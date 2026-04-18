@@ -105,6 +105,45 @@ def remove_outliers_xy(data: pd.DataFrame,x: str, y: str,g:str, thresh: float = 
     #Strip out records where Z is above 2.5
     return data.loc[abs(data["ZoCZ"]) <=thresh],data["ZoCZ"] ,np.where(abs(data["ZoCZ"])<=thresh,"Included","Cleaned")
 
+def get_chase_log_stats(con: sqlite3.Connection):
+    """Return the average log-mean and log-std of Chase finishing times across all years.
+
+    These are the population parameters needed to convert a predicted Chase time
+    (in seconds) into a z-score via the delta method:
+
+        z_pred  = (ln(t_pred) - mean_log) / std_log
+        sigma_z = sigma_t / (t_pred * std_log)   ← first-order propagation
+
+    Uses the same averaging approach as convert_Chase_ZScore_logs_avg so that
+    z-scores produced here are on the same scale as those used for training.
+
+    Args:
+        con: Active SQLite connection with the stddev aggregate registered.
+
+    Returns:
+        Tuple[float, float]: (mean_log, std_log)
+    """
+    def ln(t):
+        return np.log(t)
+    con.create_function("ln", 1, ln)
+
+    sql = '''
+        WITH Timel AS (
+            SELECT Chase_ID, Time, ln(Time) AS Timel
+            FROM Results_Chase
+            WHERE Time IS NOT NULL
+        ),
+        sds AS (
+            SELECT Chase_ID, stddev(Timel) AS sd, avg(Timel) AS mn
+            FROM Timel
+            GROUP BY Chase_ID
+        )
+        SELECT avg(mn) AS mean_log, avg(sd) AS std_log FROM sds
+    '''
+    stats = pd.read_sql(sql, con)
+    return float(stats['mean_log'].iloc[0]), float(stats['std_log'].iloc[0])
+
+
 def convert_Chase_ZScore_logs(con: sqlite3.Connection, Zscore_logs: pd.Series, year: int, apply_smear: bool = True):
     """This function extracts raw stats from the original Chase data in order to convert back Zscore log data.
     

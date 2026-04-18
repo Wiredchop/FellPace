@@ -1,5 +1,5 @@
 from scipy.stats import norm
-from fellpace.analysis_tools import convert_Chase_ZScore_logs_avg
+from fellpace.analysis_tools import convert_Chase_ZScore_logs_avg, get_chase_log_stats
 from fellpace.extract.racers import get_racers_results
 from fellpace.modelling.bayesian import calculate_initial_weights, calculate_recency_weights ,recency_weighted_bayesian
 from fellpace.parkrun.stats import parkrun_mean_std
@@ -21,18 +21,26 @@ def get_predicted_times(con, coeffs: pd.DataFrame, racer_ID: int, season: int = 
     
     return racer_results[['Racer_Name', 'Race_Name', 'Season', 'ZScore', 'PredZ', 'Predicted Time']].sort_values(['Season','Race_Name'])
 
-def get_prediction_with_uncertainty_many(coeffs, cov_matrices, racer_results):
+def get_prediction_with_uncertainty_many(coeffs, cov_matrices, racer_results, residual_stds: pd.Series = None):
     def calculate_uncertainty(row):
         race = row['Race_Name']
         ZScore = row['ZScore']
-        row['Zpred_mu'], row['Zpred_sig'] = get_prediction_with_uncertainty(coeffs[race], cov_matrices[race], ZScore)
+        residual_std = 0.0
+        if residual_stds is not None and race in residual_stds.index:
+            residual_std = float(residual_stds[race])
+        row['Zpred_mu'], row['Zpred_sig'] = get_prediction_with_uncertainty(
+            coeffs[race],
+            cov_matrices[race],
+            ZScore,
+            residual_std=residual_std,
+        )
         return row
 
     racer_results_modified = racer_results.apply(calculate_uncertainty, axis=1)
     return racer_results_modified
         
 
-def get_prediction_with_uncertainty(coeffs, cov_matrix, x):
+def get_prediction_with_uncertainty(coeffs, cov_matrix, x, residual_std: float = 0.0):
     """
     Calculates the predicted value and its uncertainty (standard deviation) for a given x value.
 
@@ -40,6 +48,9 @@ def get_prediction_with_uncertainty(coeffs, cov_matrix, x):
         coeffs: Coefficients of the linear regression (output of np.polyfit).
         cov_matrix: Covariance matrix of the regression coefficients.
         x: The x value for which to make the prediction.
+        residual_std: Residual standard deviation for the race model in z-space.
+            This captures irreducible model scatter and is added to coefficient
+            covariance to get predictive uncertainty.
 
     Returns:
         A tuple containing the predicted value and its standard deviation.
@@ -47,7 +58,7 @@ def get_prediction_with_uncertainty(coeffs, cov_matrix, x):
     # Calculate the predicted mean and variance
     mean_prediction = np.polyval(coeffs, x)
     x_vector = np.array([x, 1])  # For linear regression: [x, 1] corresponds to [slope, intercept]
-    variance = np.dot(x_vector, np.dot(cov_matrix, x_vector.T))
+    variance = np.dot(x_vector, np.dot(cov_matrix, x_vector.T)) + (residual_std ** 2)
     std_dev = np.sqrt(variance)
 
     return mean_prediction, std_dev
@@ -102,6 +113,50 @@ def make_chase_prediction(racer_result_with_predictions, prediction_year: int = 
     return predicted_mu, predicted_sigma
     
 
+def get_chase_z_from_time(
+    t_prev: float,
+    race_name: str,
+    time_coeffs: pd.Series,
+    con,
+) -> tuple:
+    """Convert a previous Chase finishing time into a z-score prediction with uncertainty.
+
+    Uses a pre-trained time-domain linear model (slope ≈ 1) to predict the
+    expected finishing time, then converts to Chase z-score space via the
+    delta method so the result is compatible with recency_weighted_bayesian.
+
+    Maths:
+        t_pred  = slope * t_prev + intercept
+        z_pred  = (ln(t_pred) - mean_log) / std_log
+        sigma_z = sigma_resid / (t_pred * std_log)     ← first-order propagation
+
+    The sigma_resid is the empirical standard deviation of residuals from the
+    time regression, giving uncertainty grounded in historical scatter rather
+    than field-normalisation noise.
+
+    Args:
+        t_prev:      Previous Chase finishing time in seconds.
+        race_name:   'previous_chase' or 'older_chase' — selects the correct model.
+        time_coeffs: Loaded time models from load_time_models().
+        con:         Active SQLite connection (for Chase log stats).
+
+    Returns:
+        Tuple[float, float]: (z_pred, sigma_z)
+    """
+    model = time_coeffs[race_name]
+    slope         = model['slope']
+    intercept     = model['intercept']
+    sigma_resid   = model['sigma_resid']
+
+    t_pred  = slope * t_prev + intercept
+    mean_log, std_log = get_chase_log_stats(con)
+
+    z_pred  = (np.log(t_pred) - mean_log) / std_log
+    sigma_z = sigma_resid / (t_pred * std_log)
+
+    return float(z_pred), float(sigma_z)
+
+
 def get_probability_distribution(mean, std_dev, a = -3, b = 3, step=0.01):
     """
     Calculates the probability distribution of predictions within bounds [a, b],
@@ -133,7 +188,13 @@ def get_probability_distribution(mean, std_dev, a = -3, b = 3, step=0.01):
     return pd.Series(probabilities)
 
 
-def get_prediction_from_parkrun_time(con, parkrun_time: str, coeffs: pd.DataFrame, cov_matrices: Dict[str, np.ndarray]) -> pd.DataFrame:
+def get_prediction_from_parkrun_time(
+    con,
+    parkrun_time: str,
+    coeffs: pd.DataFrame,
+    cov_matrices: Dict[str, np.ndarray],
+    residual_std: float = 0.0,
+) -> pd.DataFrame:
     """Get the predicted Zscore with uncertainty from a given parkrun time. This function does NOT convert to seconds.
 
     Args:
@@ -155,11 +216,18 @@ def get_prediction_from_parkrun_time(con, parkrun_time: str, coeffs: pd.DataFram
 
     z_score = ((log_seconds - stats['Mean']) / stats['StdDev']).squeeze()
 
-    mean, std = get_prediction_with_uncertainty(coeffs, cov_matrices, z_score)
+    mean, std = get_prediction_with_uncertainty(coeffs, cov_matrices, z_score, residual_std=residual_std)
 
     return mean, std, z_score
 
-def get_prediction_time_from_parkrun_time(con, parkrun_time: str, prediction_year: int, coeffs: pd.DataFrame, cov_matrices: Dict[str, np.ndarray]) -> pd.DataFrame:
+def get_prediction_time_from_parkrun_time(
+    con,
+    parkrun_time: str,
+    prediction_year: int,
+    coeffs: pd.DataFrame,
+    cov_matrices: Dict[str, np.ndarray],
+    residual_std: float = 0.0,
+) -> pd.DataFrame:
     """
     Get the predicted times based on a parkrun time.
     
@@ -182,7 +250,7 @@ def get_prediction_time_from_parkrun_time(con, parkrun_time: str, prediction_yea
     
     z_score = ((log_seconds - stats['Mean']) / stats['StdDev']).squeeze()
     
-    mean, std = get_prediction_with_uncertainty(coeffs, cov_matrices, z_score)
+    mean, std = get_prediction_with_uncertainty(coeffs, cov_matrices, z_score, residual_std=residual_std)
     
     pr_prediction = mean - (1.96 * std) 
     
