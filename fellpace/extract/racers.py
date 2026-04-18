@@ -1,6 +1,58 @@
 import pandas as pd
 import Levenshtein
+import json
+from pathlib import Path
 from loguru import logger
+from fellpace.config import DB_DIR
+
+
+RACER_NAME_ALIAS_PATH = DB_DIR / "racer_name_aliases.json"
+
+
+def _load_racer_name_aliases(path: Path = RACER_NAME_ALIAS_PATH) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception as exc:
+        logger.warning(f"Could not load racer alias map at {path}: {exc}")
+    return {}
+
+
+def _save_racer_name_aliases(alias_map: dict, path: Path = RACER_NAME_ALIAS_PATH) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(alias_map, f, indent=2, sort_keys=True)
+    except Exception as exc:
+        logger.warning(f"Could not save racer alias map at {path}: {exc}")
+
+
+def _resolve_alias_racer_id(con, requested_name: str) -> tuple:
+    alias_map = _load_racer_name_aliases()
+    mapped_name = alias_map.get(requested_name)
+    if not mapped_name:
+        return None, None
+
+    mapped_id = find_racer_ID(con, name=mapped_name)
+    if mapped_id is not None:
+        logger.info(f"Using saved name alias: '{requested_name}' -> '{mapped_name}'")
+        return mapped_id, mapped_name
+
+    logger.warning(
+        f"Saved alias for '{requested_name}' points to missing DB racer '{mapped_name}'."
+    )
+    return None, None
+
+
+def _add_racer_alias(requested_name: str, resolved_name: str) -> None:
+    alias_map = _load_racer_name_aliases()
+    alias_map[requested_name] = resolved_name
+    _save_racer_name_aliases(alias_map)
+    logger.info(f"Saved name alias: '{requested_name}' -> '{resolved_name}'")
 
 
 def find_racer_ID(con, name):
@@ -92,21 +144,38 @@ def secure_racer_id(con, racer_name: str):
         Tuple[int, str]: A tuple containing the racer ID and name.
     """
 
-    racer_id = find_racer_ID(con, name = racer_name)
+    requested_name = racer_name.lower().strip()
+    racer_id = find_racer_ID(con, name=requested_name)
+    resolved_name = requested_name
+
     if racer_id is None:
-        logger.warning(f"Racer {racer_name} not found in database.")
+        racer_id, resolved_name = _resolve_alias_racer_id(con, requested_name)
+        if racer_id is not None:
+            return racer_id, resolved_name
+
+        logger.warning(f"Racer {requested_name} not found in database.")
         logger.info("Looking for similar names...")
-        names = find_similar_name(con, name = racer_name)
+        names = find_similar_name(con, name=requested_name)
         if names.empty:
             logger.info("No similar names found.")
             return None, None
+        i = -1
         for i, row in names.iterrows():
             logger.info(f"{i}: {row['Racer_Name']}")
         logger.info(f"{i+1}: None of these are correct")
         selected_index = int(input("Select the number of the name you want to use: "))
-        if selected_index == i+1:
+        if selected_index == i + 1:
             logger.info("No name selected, exiting.")
             return None, None
-        racer_name = names.iloc[selected_index]['Racer_Name']
+
+        if selected_index < 0 or selected_index >= len(names):
+            logger.info("Invalid selection, exiting.")
+            return None, None
+
+        resolved_name = names.iloc[selected_index]['Racer_Name']
         racer_id = names.iloc[selected_index]['Racer_ID']
-    return racer_id, racer_name
+
+        # Persist alias for future lookups.
+        _add_racer_alias(requested_name, resolved_name)
+
+    return racer_id, resolved_name

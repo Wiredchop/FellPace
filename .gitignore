@@ -7,3 +7,4 @@ legacy/
 *.db
 *.egg-info/
 *.png
+__marimo__/

@@ -1,8 +1,6 @@
 from fellpace.modelling.prediction import get_probability_distribution, make_chase_prediction
 from fellpace.analysis_tools import convert_Chase_ZScore_logs_avg
 from fellpace.convert_tools import seconds_to_time_string
-from fellpace.modelling.training import load_models
-from fellpace.entries import process_results_for_racer
 from matplotlib import pyplot as plt
 from fellpace.config import ENTRIES_PATH
 from datetime import date
@@ -82,7 +80,7 @@ def plot_racer_entry(
         prediction_year (int): Year of the prediction, defaults to current year.
         racer_name (str): Name of the racer.
     """
-    _, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
     
     if 'include' in racer_results.columns:
         included_results = racer_results[racer_results['include']]
@@ -106,10 +104,12 @@ def plot_racer_entry(
         if not save_path.exists():
             save_path.mkdir(parents=True)
         plt.savefig(save_path / f'{racer_name}.png')
+    return fig, ax
 
 
 def generate_racer_prediction_plot(
     con: sqlite3.Connection,
+    model_tuple: tuple,
     racer_id: int,
     racer_name: str,
     year: int = date.today().year,
@@ -124,6 +124,7 @@ def generate_racer_prediction_plot(
     
     Args:
         con (sqlite3.Connection): Database connection.
+        model_tuple (tuple): Tuple of (coeffs, covar, resid_stds) preloaded models.
         racer_id (int): The racer's ID.
         racer_name (str): The racer's name.
         year (int): Year for predictions. Defaults to current year.
@@ -134,7 +135,10 @@ def generate_racer_prediction_plot(
         bool: True if plot was generated successfully, False otherwise.
     """
     try:
-        coeffs, covar, resid_stds = load_models(include_residuals=True)
+        # Import here to avoid circular import: entries -> plotting.racetimes
+        from fellpace.entries import process_results_for_racer
+
+        coeffs, covar, resid_stds = model_tuple
         
         racer_results, _ = process_results_for_racer(con, coeffs, covar, resid_stds=resid_stds, racer_id=racer_id)
         if racer_results.empty:

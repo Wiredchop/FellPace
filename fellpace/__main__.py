@@ -229,13 +229,21 @@ def show_race_outliers(racer_name: str = 'nick hamilton'):
 @app.command()
 def plot_racer_likelihoods(racer_name: str = 'nick hamilton', year: int = date.today().year):
     con = setup_db(DB_PATH)
+    coeffs, covar, resid_stds = load_models(include_residuals=True)
     logger.info(f"Predicting finish time for {racer_name} in {year}")
     racer_id, racer_name = secure_racer_id(con, racer_name)
     if racer_id is None:
         logger.warning(f"Racer {racer_name} not found in database.")
         return
     
-    generate_racer_prediction_plot(con, racer_id, racer_name, year=year, display=True)
+    generate_racer_prediction_plot(
+        con,
+        (coeffs, covar, resid_stds),
+        racer_id,
+        racer_name,
+        year=year,
+        display=True,
+    )
     con.close()
 
 @app.command()
@@ -251,12 +259,27 @@ def process_chase(file: str, date: str):
     process_chase_csv(file, date, con)
     con.close()
     
-def generate_racer_plot(con, racer_id: int, racer_name: str, year: int, output_dir: Path):
+def generate_racer_plot(
+    con,
+    model_tuple: tuple,
+    racer_id: int,
+    racer_name: str,
+    year: int,
+    output_dir: Path,
+):
     """
     Generate and save a prediction likelihood plot for a single racer.
     Wrapper around the plotting module's generate_racer_prediction_plot.
     """
-    generate_racer_prediction_plot(con, racer_id, racer_name, year=year, output_dir=output_dir, display=False)
+    generate_racer_prediction_plot(
+        con,
+        model_tuple,
+        racer_id,
+        racer_name,
+        year=year,
+        output_dir=output_dir,
+        display=False,
+    )
 
 @app.command()
 def entries(
@@ -275,6 +298,8 @@ def entries(
     export_entries_to_csv(processed_entries, year_of_entry=year)
     
     if plot_likelihoods:
+        coeffs, covar, resid_stds = load_models(include_residuals=True)
+        model_tuple = (coeffs, covar, resid_stds)
         # Create output directory for plots
         output_dir = Path(f"./racer_likelihoods_{year}")
         output_dir.mkdir(exist_ok=True)
@@ -288,7 +313,7 @@ def entries(
             if racer_id is None:
                 logger.warning(f"Racer {racer_name} not found in database, skipping.")
                 continue
-            generate_racer_plot(con, racer_id, racer_name, year, output_dir)
+            generate_racer_plot(con, model_tuple, racer_id, racer_name, year, output_dir)
         
         logger.info(f"Finished generating plots. Saved to {output_dir}")
 

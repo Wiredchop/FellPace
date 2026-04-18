@@ -181,7 +181,7 @@ def gather_results_for_entries(entries: pd.DataFrame, con: Connection, year_of_e
         
         if with_parkrun:
             PR_time = entry.get('PR_time', None)
-            if PR_time is not None:
+            if pd.notna(PR_time) and isinstance(PR_time, str) and ':' in PR_time:
                 pr_mean, pr_sig, pr_zscore = get_prediction_from_parkrun_time(
                     con,
                     PR_time,
@@ -241,7 +241,7 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
         pr_prediction_str = "N/A"
         if with_parkrun:
             PR_time = entry.get('PR_time', None)
-            if PR_time is not None:
+            if pd.notna(PR_time) and isinstance(PR_time, str) and ':' in PR_time:
                 pr_prediction_t = get_prediction_time_from_parkrun_time(
                     con,
                     PR_time,
@@ -284,7 +284,8 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
         if (~racer_results['include']).any():
             logger.info(f"Excluded results:\n {tabulate(racer_results.loc[~racer_results['include']], headers='keys', tablefmt='rounded_outline')}")
 
-        if racer_results.empty:
+        prediction_t = None
+        if racer_results.empty or racer_results.loc[racer_results['include']].empty:
             prediction_str = 'N/A'
         else:
             # Subtracting 1 from the year of entry as year before race is most recent possible
@@ -317,7 +318,7 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
             'Num_excluded_results': len(racer_results.loc[~racer_results['include']]),
             'Predicted_Time': prediction_str,
             'Given PR prediction': pr_prediction_str,
-            'Predicted_Time_seconds': prediction_t if racer_results is not None else None,
+            'Predicted_Time_seconds': prediction_t,
             f'Chase {this_year-1}': extract_result_for_year(chase_results, this_year - 1),
             f'Chase {this_year-2}': extract_result_for_year(chase_results, this_year - 2),
             f'Chase {this_year-3}': extract_result_for_year(chase_results, this_year - 3),
