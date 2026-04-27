@@ -70,18 +70,27 @@ class ParkRunConverter:
                 out.append(None)
         return out
     
-    def convert_PR_name(self,name_strings : npt.ArrayLike) -> npt.ArrayLike:        
-        
+    def convert_PR_name(self,name_strings : npt.ArrayLike) -> npt.ArrayLike:
         out = []
         for name_string in name_strings:
-            name = match('\D+(?=[0-9]+)',name_string) # Don't need start of string signifier because match goes from start of string
-            if not name:
+            if not isinstance(name_string, str):
                 out.append('')
                 continue
-            name = name.group()
-            #Ensure title case as case sensitive
-            name.title()
-            out.append(name) 
+
+            cleaned = " ".join(name_string.split())
+            if not cleaned:
+                out.append('')
+                continue
+
+            # Legacy Parkrun format often appended an ID after the name.
+            name = match('\D+(?=[0-9]+)', cleaned)
+            if name:
+                candidate = name.group().strip()
+            else:
+                # Newer table format provides plain names with no trailing numeric id.
+                candidate = sub('\s*\([^)]*\)\s*$', '', cleaned).strip()
+
+            out.append(candidate.title() if candidate else '')
         return out
     
     def convert_PR_categories(self,category_strings : npt.ArrayLike) -> npt.ArrayLike:

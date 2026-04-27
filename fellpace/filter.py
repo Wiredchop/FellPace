@@ -1,6 +1,7 @@
 "A module to filter any data according to specific criteria. For example, if it's an outlier or if it's an un-needed parkrun entry."
 
 from fellpace.config import EXCLUDE_LIST
+from fellpace.race_overrides import _load_overrides, build_override_key
 import pandas as pd
 
 def filter_race_results(racer_results: pd.DataFrame) -> None:
@@ -11,6 +12,8 @@ def filter_race_results(racer_results: pd.DataFrame) -> None:
     1. Any race names that are in an exclusion list (can be tweaked in the config file)
     2. If we have more than three results that are NOT parkrun, remove any parkrun results.
     3. If we are using outliers, remove any results that are outliers.
+    4. A manual override keyed by (Racer_ID or Racer_Name, Season, Race_Name) stored in
+       DB/race_include_overrides.json takes absolute precedence over all automatic rules.
 
     Args:
         racer_results (_type_): _description_
@@ -32,4 +35,13 @@ def filter_race_results(racer_results: pd.DataFrame) -> None:
         outlier_mask = pd.Series([True] * len(racer_results), index=racer_results.index)
         
     final_mask = exclude_mask & parkrun_mask & outlier_mask
-    racer_results['include'] =  final_mask
+
+    # Apply manual overrides: a JSON entry for a composite key takes full precedence.
+    overrides = _load_overrides()
+    if overrides:
+        for idx, row in racer_results.iterrows():
+            key = build_override_key(row)
+            if key is not None and key in overrides:
+                final_mask.at[idx] = bool(overrides[key])
+
+    racer_results['include'] = final_mask

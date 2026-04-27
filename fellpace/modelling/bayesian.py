@@ -47,7 +47,16 @@ def calculate_recency_weights(year_to_predict: int, season: np.ndarray, initial_
     return initial_weights * np.exp(-lambda_decay * time_since_race)
 
 
-def recency_weighted_bayesian(prior_mu, prior_sigma, observed_mu, observed_sigma, weights, race_names = None):
+def recency_weighted_bayesian(
+    prior_mu,
+    prior_sigma,
+    observed_mu,
+    observed_sigma,
+    weights,
+    race_names=None,
+    small_n_tau: float = 0.6,
+    small_n_offset: float = 1.0,
+):
     """
     Compute the posterior mean and standard deviation using a recency-weighted Bayesian approach.
 
@@ -63,6 +72,10 @@ def recency_weighted_bayesian(prior_mu, prior_sigma, observed_mu, observed_sigma
         observed_sigma: Array of observed prediction standard deviations.
         weights: Recency weights for each observation.
         race_names: Optional array of race names for logging.
+        small_n_tau: Scale of small-n uncertainty penalty (z-score units).
+            Higher values increase posterior uncertainty when data is sparse.
+        small_n_offset: Controls how quickly the small-n penalty decays as
+            effective sample size increases.
 
     Returns:
         (posterior_mu, posterior_sigma): Posterior mean and standard deviation.
@@ -90,12 +103,25 @@ def recency_weighted_bayesian(prior_mu, prior_sigma, observed_mu, observed_sigma
     else:
         overdispersion_factor = 1.0
 
-    posterior_variance = naive_posterior_variance * overdispersion_factor
+    # Small-n penalty: add extra variance when effective sample size is low.
+    # This preserves mean behavior while preventing overconfident estimates for sparse data.
+    effective_n = max(float(np.sum(np.clip(weights, 0.0, None))), 1e-9)
+    if small_n_tau > 0:
+        small_n_penalty_variance = (small_n_tau ** 2) / (effective_n + small_n_offset)
+    else:
+        small_n_penalty_variance = 0.0
+
+    posterior_variance = (naive_posterior_variance * overdispersion_factor) + small_n_penalty_variance
     posterior_sigma = np.sqrt(posterior_variance)
 
-    logger.debug(f"Overdispersion factor: {overdispersion_factor:.3f}")
+    logger.debug(
+        f"Overdispersion factor: {overdispersion_factor:.3f}, "
+        f"small_n_penalty_variance: {small_n_penalty_variance:.4f}, "
+        f"effective_n: {effective_n:.3f}"
+    )
 
     return posterior_mu, posterior_sigma
+
 
 def hierarchical_bayesian_model(global_race_mu, global_race_sigma, observed_times, observed_race_variability, time_since_race, lambda_decay = 0.1):
     """
@@ -154,7 +180,36 @@ if __name__ == "__main__":
     print(f"Posterior Mean (Recency-Weighted): {posterior_mu:.2f} seconds")
     print(f"Posterior Standard Deviation: {posterior_sigma:.2f} seconds")
 
+    print("\n" + "="*70)
+    print("Small-n uncertainty example")
+    print("="*70)
+
+    observed_mu_single = np.array([450.0])
+    observed_sigma_single = np.array([10.0])
+    weights_single = np.array([1.0])
+
+    posterior_mu_no_small_n, posterior_sigma_no_small_n = recency_weighted_bayesian(
+        prior_mu=300,
+        prior_sigma=20,
+        observed_mu=observed_mu_single,
+        observed_sigma=observed_sigma_single,
+        weights=weights_single,
+        small_n_tau=0.0,
+    )
+    print(f"No small-n term: mean={posterior_mu_no_small_n:.2f}, sigma={posterior_sigma_no_small_n:.2f}")
+
+    posterior_mu_small_n, posterior_sigma_small_n = recency_weighted_bayesian(
+        prior_mu=300,
+        prior_sigma=20,
+        observed_mu=observed_mu_single,
+        observed_sigma=observed_sigma_single,
+        weights=weights_single,
+        small_n_tau=0.6,
+    )
+    print(f"With small-n term: mean={posterior_mu_small_n:.2f}, sigma={posterior_sigma_small_n:.2f}")
+
     # Hierarchical Bayesian example
+    print("\n" + "="*70)
     global_race_mu = 300
     global_race_sigma = 20
     observed_times = np.array([305, 290, 355])

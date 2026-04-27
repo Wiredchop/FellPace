@@ -28,6 +28,7 @@ def _():
     from fellpace.analysis_tools import convert_Chase_ZScore_logs_avg
     from fellpace.plotting.racetimes import plot_racer_entry
     from fellpace.convert_tools import seconds_to_time_string
+    from fellpace.race_overrides import set_race_override
 
     return (
         DB_PATH,
@@ -49,6 +50,7 @@ def _():
         seconds_to_time_string,
         secure_racer_id,
         setup_db,
+        set_race_override,
     )
 
 
@@ -313,12 +315,17 @@ def _(
     plot_racer_entry,
     prediction_year,
     process_results_for_racer,
+    racer_refresh_count,
     seconds_to_time_string,
     secure_racer_id,
     selected_row,
 ):
+    # Explicitly read refresh token so this cell reruns after manual override writes.
+    racer_refresh_count()
     plot_info = mo.md("Select a row in the Actual vs Predicted table to view that racer's prediction distributions.")
     figure = None
+    racer_detail_table = None
+    racer_id = None
 
     if comparison_selector is not None and selected_row is not None:
         racer_id, canonical_name = secure_racer_id(con, selected_row["Name"].lower().strip())
@@ -330,6 +337,7 @@ def _(
                 covar,
                 resid_stds=resid_stds,
                 racer_id=racer_id,
+                prediction_year=prediction_year,
             )
 
             if racer_results is not None and not racer_results.empty:
@@ -338,6 +346,22 @@ def _(
                 ].reset_index(drop=True)
 
                 if not racer_results.empty:
+                    detail_cols = [
+                        "Racer_ID",
+                        "Racer_Name",
+                        "Race_Name",
+                        "Season",
+                        "Zpred_mu",
+                        "Zpred_sig",
+                        "include",
+                        "outlier",
+                    ]
+                    detail_cols = [c for c in detail_cols if c in racer_results.columns]
+                    racer_detail_table = racer_results[detail_cols].copy().sort_values(
+                        [c for c in ["Season", "Race_Name"] if c in detail_cols],
+                        ascending=[False, True] if "Season" in detail_cols and "Race_Name" in detail_cols else True,
+                    )
+
                     chase_mu, chase_sig = make_chase_prediction(
                         racer_results.loc[racer_results["include"]],
                         prediction_year=prediction_year,
@@ -387,15 +411,92 @@ def _(
                             )
                         else:
                             plot_info = mo.md(f"Predicted: {pred_str} | Actual: N/A")
-    return figure, plot_info
+    return figure, plot_info, racer_detail_table, racer_id
 
 
 @app.cell
-def _(figure, mo, plot_info):
+def _(figure, include_checkboxes, mo, plot_info, racer_detail_display_table, racer_detail_table):
     outputs = [plot_info]
     if figure is not None:
         outputs.append(figure)
+    if racer_detail_table is not None and not racer_detail_table.empty:
+        outputs.extend(
+            [
+                mo.md("### Races Used vs Excluded"),
+                mo.ui.table(racer_detail_display_table, selection=None),
+            ]
+        )
+        if include_checkboxes is not None:
+            outputs.extend([
+                mo.md(
+                    "Toggle checkboxes to include/exclude each race. Changes are saved "
+                    "immediately and this racer is recalculated automatically."
+                ),
+                include_checkboxes,
+            ])
     mo.vstack(outputs)
+    return
+
+
+@app.cell
+def _(mo):
+    racer_refresh_count, set_racer_refresh_count = mo.state(0)
+    return racer_refresh_count, set_racer_refresh_count
+
+
+@app.cell
+def _(mo, racer_detail_table):
+    if racer_detail_table is not None and not racer_detail_table.empty:
+        detail_table_cols = [
+            c for c in ["Race_Name", "Season", "Zpred_mu", "Zpred_sig", "include", "outlier"]
+            if c in racer_detail_table.columns
+        ]
+        racer_detail_display_table = racer_detail_table[detail_table_cols].copy()
+
+        include_checkboxes = mo.ui.array(
+            [
+                mo.ui.checkbox(
+                    value=bool(row["include"]),
+                    label=f"{row['Race_Name']} ({int(row['Season'])})",
+                )
+                for _, row in racer_detail_table.iterrows()
+            ],
+            label="Manual include / exclude",
+        )
+    else:
+        include_checkboxes = None
+        racer_detail_display_table = None
+    return include_checkboxes, racer_detail_display_table
+
+
+@app.cell
+def _(
+    include_checkboxes,
+    racer_detail_table,
+    racer_id,
+    racer_refresh_count,
+    set_race_override,
+    set_racer_refresh_count,
+):
+    _wrote_override = False
+    if (
+        include_checkboxes is not None
+        and racer_detail_table is not None
+        and racer_id is not None
+    ):
+        for _i, (_, _row) in enumerate(racer_detail_table.iterrows()):
+            if _i < len(include_checkboxes.value):
+                _new_val = bool(include_checkboxes.value[_i])
+                if bool(_row["include"]) != _new_val:
+                    set_race_override(
+                        racer_id,
+                        int(_row["Season"]),
+                        _row["Race_Name"],
+                        _new_val,
+                    )
+                    _wrote_override = True
+    if _wrote_override:
+        set_racer_refresh_count(racer_refresh_count() + 1)
     return
 
 

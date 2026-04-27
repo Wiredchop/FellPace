@@ -1,7 +1,7 @@
 from scipy.stats import norm
 from fellpace.analysis_tools import convert_Chase_ZScore_logs_avg, get_chase_log_stats
 from fellpace.extract.racers import get_racers_results
-from fellpace.modelling.bayesian import calculate_initial_weights, calculate_recency_weights ,recency_weighted_bayesian
+from fellpace.modelling.bayesian import calculate_initial_weights, calculate_recency_weights, recency_weighted_bayesian
 from fellpace.parkrun.stats import parkrun_mean_std
 
 from typing import Dict, Tuple
@@ -70,7 +70,8 @@ def make_chase_prediction(racer_result_with_predictions, prediction_year: int = 
     This function prepares each result by calculating initial weights based on the results we have.
     It then adjusts these weights based on the recency of the results.
     
-    From this it adds the results to a bayesian update model to get a final prediction.
+    Uses recency_weighted_bayesian as the core engine, including an explicit
+    small-n uncertainty term so sparse data does not look overconfident.
     
     Args:
         racer_result_with_predictions (pd.DataFrame): DataFrame containing the results with predictions.
@@ -80,13 +81,13 @@ def make_chase_prediction(racer_result_with_predictions, prediction_year: int = 
     Returns:
         Tuple[float, float]: The predicted mean and standard deviation of the chase ZScore.
     """
-    assert (racer_result_with_predictions['Season'] < prediction_year).all(), "All results must be from seasons BEFORE the prediction year"
     if prediction_year is None:
         prediction_year = date.today().year
+    assert (racer_result_with_predictions['Season'] < prediction_year).all(), "All results must be from seasons BEFORE the prediction year"
     
     #  All values based on z distribution
     prior_mu = 0
-    prior_sigma = 1
+    prior_sigma = 1.96
     
     # Calculate initial weights for each race
     racer_result_with_predictions['Initial_Weight'] = calculate_initial_weights(racer_result_with_predictions)
@@ -109,7 +110,18 @@ def make_chase_prediction(racer_result_with_predictions, prediction_year: int = 
         race_names = (racer_result_with_predictions['Race_Name'] + ' ' + racer_result_with_predictions['Season'].astype(str)).values
     else:
         race_names = None
-    predicted_mu, predicted_sigma = recency_weighted_bayesian(prior_mu, prior_sigma, mu_values, sigma_values, weights, race_names=race_names) 
+    
+    predicted_mu, predicted_sigma = recency_weighted_bayesian(
+        prior_mu,
+        prior_sigma,
+        mu_values,
+        sigma_values,
+        weights,
+        race_names=race_names,
+        small_n_tau=0.6,
+        small_n_offset=1.0,
+    )
+    
     return predicted_mu, predicted_sigma
     
 

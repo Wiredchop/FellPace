@@ -26,6 +26,7 @@ dependencies = [
     "marimo>=0.14.16",
     "pyarrow>=21.0.0",
     "selenium>=4.36.0",
+    "playwright>=1.58.0",
 ]
 
  [tool.setuptools] 

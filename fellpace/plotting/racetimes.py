@@ -140,7 +140,14 @@ def generate_racer_prediction_plot(
 
         coeffs, covar, resid_stds = model_tuple
         
-        racer_results, _ = process_results_for_racer(con, coeffs, covar, resid_stds=resid_stds, racer_id=racer_id)
+        racer_results, _ = process_results_for_racer(
+            con,
+            coeffs,
+            covar,
+            resid_stds=resid_stds,
+            racer_id=racer_id,
+            prediction_year=year,
+        )
         if racer_results.empty:
             logger.warning(f"No valid results found for {racer_name}.")
             return False

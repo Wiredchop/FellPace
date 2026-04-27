@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 import re
-
+import Levenshtein
+import loguru as logger
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -38,19 +39,109 @@ def _distance_for_event(event_name: str) -> str | None:
     return None
 
 
-def scrape_athlete_yearly_best(athlete_url: str, min_year: int = 2016) -> dict[str, Any]:
-    """Return yearly best 5k/10k performances for a Power of 10 athlete URL."""
+def _normalize_person_name(name: str) -> str:
+    parts = [part for part in str(name).strip().split() if part]
+    if not parts:
+        return "Unknown"
+    normalized = []
+    for part in parts:
+        if part.isupper() and len(part) > 1:
+            normalized.append(part.title())
+        else:
+            normalized.append(part)
+    return " ".join(normalized)
+
+
+def _extract_athlete_name(soup: BeautifulSoup) -> str:
+    # Athlete pages usually show name immediately above "CLUB".
+    page_text = [line.strip() for line in soup.get_text("\n", strip=True).splitlines()]
+    invalid_labels = {
+        "age group",
+        "athletes",
+        "performance",
+        "performances",
+        "event rankings",
+        "show road running",
+        "show bio",
+        "bio",
+        "sex",
+        "men",
+        "women",
+        "county",
+        "club",
+        "lead coach",
+        "coach",
+        "unattached",
+    }
+
+    for idx, line in enumerate(page_text):
+        if line.upper().startswith("CLUB") and idx > 0:
+            # Gather contiguous name-like tokens above CLUB. Some pages split
+            # first and surname across separate lines.
+            tokens: list[str] = []
+            back_idx = idx - 1
+            while back_idx >= 0 and len(tokens) < 4:
+                token = page_text[back_idx].strip()
+                token_lower = token.lower()
+                if not token:
+                    back_idx -= 1
+                    continue
+                if token_lower in invalid_labels:
+                    break
+                if any(char.isdigit() for char in token):
+                    break
+                if re.match(r"^[A-Za-z][A-Za-z'\-\.]*$", token):
+                    tokens.append(token)
+                    back_idx -= 1
+                    continue
+                # Also allow a full name on one line.
+                if re.match(r"^[A-Za-z][A-Za-z'\-\.\s]+[A-Za-z]$", token):
+                    return _normalize_person_name(token)
+                break
+
+            if len(tokens) >= 2:
+                return _normalize_person_name(" ".join(reversed(tokens)))
+
+    # Last fallback: parse page title metadata if CLUB-adjacent extraction fails.
+    title_candidates: list[str] = []
+    og_title = soup.find("meta", attrs={"property": "og:title"})
+    if og_title and og_title.get("content"):
+        title_candidates.append(str(og_title.get("content")))
+    if soup.title and soup.title.string:
+        title_candidates.append(str(soup.title.string))
+
+    for title in title_candidates:
+        match = re.search(
+            r"athlete[^\-:|]*[-:|]\s*([A-Za-z][A-Za-z'\-\.\s]+)",
+            title,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            candidate = _normalize_person_name(match.group(1))
+            if candidate.lower() not in invalid_labels:
+                return candidate
+
+    return "Unknown"
+
+
+def scrape_athlete_yearly_best(
+    athlete_url: str,
+    min_year: int = 2016,
+    max_year: int | None = None,
+) -> dict[str, Any]:
+    """Return yearly best 5k/10k performances for a Power of 10 athlete URL.
+
+    Args:
+        athlete_url: Power of 10 athlete page URL.
+        min_year: Lower inclusive bound for performances.
+        max_year: Upper inclusive bound for performances. Ignored when None.
+    """
     response = requests.get(athlete_url, timeout=30)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.content, "html.parser")
 
-    athlete_name = "Unknown"
-    for tag in soup.find_all(["h2", "h3", "strong"]):
-        text = tag.get_text(strip=True)
-        if text and len(text) > 3 and not any(x in text.lower() for x in ["club", "lead", "coach", "event", "performance"]):
-            athlete_name = text
-            break
+    athlete_name = _extract_athlete_name(soup)
 
     performances: list[dict[str, Any]] = []
     scripts = soup.find_all("script")
@@ -89,6 +180,8 @@ def scrape_athlete_yearly_best(athlete_url: str, min_year: int = 2016) -> dict[s
                 year = _extract_year(date_value)
                 if year is None or year < min_year:
                     continue
+                if max_year is not None and year > max_year:
+                    continue
 
                 performances.append(
                     {
@@ -124,3 +217,50 @@ def scrape_athlete_yearly_best(athlete_url: str, min_year: int = 2016) -> dict[s
             }
         ).to_dict(orient="records"),
     }
+    
+def get_racer_p10_results_for_prediction(racer_id: int, racer_name: str, athlete_url: str, prediction_year: int = None) -> pd.DataFrame | None:
+    """Get a racer's Power of 10 yearly best results for use in prediction.
+
+    Args:
+        athlete_url: Power of 10 athlete page URL.
+        prediction_year: If provided, only include seasons before this year.
+    """
+    if prediction_year is None:
+        max_year = pd.Timestamp.now().year
+    else:
+        max_year = prediction_year
+        
+    
+    data = scrape_athlete_yearly_best(athlete_url, max_year=max_year)
+    
+    scraped_name = data.get("athlete_name", "Unknown")
+    
+    name_distance = Levenshtein.distance(scraped_name.lower(), racer_name.lower())
+    if name_distance > 2:
+        logger.warning(f"Scraped name '{scraped_name}' is too different from racer name '{racer_name}' (distance {name_distance}). Skipping P10 results.")
+        return None
+    
+    if len(data.get("yearly_best", [])) == 0:
+        return None
+    results = (
+        pd.DataFrame(data.get("yearly_best"))
+        .rename(
+            columns={
+            "distance": "Race_Name",
+            "best_time_seconds": "Time",
+            "year": "Season",
+            }
+        )
+        .assign(
+            Racer_ID=racer_id,
+            Zpred_mu = None
+    )
+    )[["Racer_ID", "Race_Name", "Time", "Zpred_mu", "Season"]]
+
+    return results
+
+if __name__ == "__main__":
+    # Example usage:
+    athlete_url = "https://www.powerof10.uk/Home/Athlete/1ee315ac-0a39-4d4a-82a8-beabecaf8cd9"
+    result = scrape_athlete_yearly_best(athlete_url)
+    print(result)
