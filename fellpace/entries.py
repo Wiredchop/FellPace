@@ -1,5 +1,5 @@
 from fellpace.FellPace_tools import get_table_from_URL
-from fellpace.modelling.training import load_models, load_time_models
+from fellpace.modelling.training import load_models, load_time_models, load_road_time_models
 from fellpace.modelling.prediction import get_racers_results, get_chase_z_from_time, get_prediction_with_uncertainty_many, make_chase_prediction, get_prediction_time_from_parkrun_time, get_prediction_from_parkrun_time
 from fellpace.extract.racers import secure_racer_id
 from fellpace.analysis_tools import identify_outliers_in_predictions, convert_Chase_ZScore_logs_avg
@@ -197,7 +197,7 @@ def combine_results_with_p10_results(
     racer_results: pd.DataFrame,
     p10_results: pd.DataFrame,
     con,
-    time_coeffs,
+    road_time_coeffs,
 ) -> pd.DataFrame:
     """
     Combine racer results with Power of 10 results.
@@ -209,7 +209,7 @@ def combine_results_with_p10_results(
         racer_results (pd.DataFrame): DataFrame containing the racer's results.
         p10_results (pd.DataFrame): DataFrame containing the Power of 10 results.
         con:           Active SQLite connection (passed through to delta method).
-        time_coeffs:   Loaded time models from load_time_models().
+        road_time_coeffs: Loaded road time models from load_road_time_models().
 
     Returns:
         pd.DataFrame: Combined DataFrame with both racer and Power of 10 results.
@@ -218,9 +218,85 @@ def combine_results_with_p10_results(
         p10_results,
         racer_name=racer_results['Racer_Name'].iloc[0],
         con=con,
-        time_coeffs=time_coeffs,
+        time_coeffs=road_time_coeffs,
     )
     return pd.concat([racer_results, prepared_p10_results], ignore_index=True)
+
+
+def _build_given_pr_prediction_row(
+    con,
+    coeffs,
+    covar,
+    resid_stds,
+    given_pr_time: str | None,
+    racer_id,
+    racer_name: str,
+    prediction_year: int | None,
+) -> pd.DataFrame:
+    """Create a PR_given prediction row from submitted PR time."""
+    if given_pr_time is None:
+        return pd.DataFrame()
+
+    try:
+        pr_mean, pr_sig, pr_zscore = get_prediction_from_parkrun_time(
+            con,
+            given_pr_time,
+            coeffs['PR_Endcliffe'],
+            covar['PR_Endcliffe'],
+            residual_std=float(resid_stds.get('PR_Endcliffe', 0.0)) if resid_stds is not None else 0.0,
+        )
+        season = (prediction_year - 1) if prediction_year is not None else (date.today().year - 1)
+        return pd.DataFrame([{
+            'Racer_ID': racer_id,
+            'Racer_Name': racer_name,
+            'Race_Name': 'PR_given',
+            'Season': season,
+            'ZScore': pr_zscore,
+            'Zpred_mu': pr_mean,
+            'Zpred_sig': pr_sig,
+        }])
+    except Exception as e:
+        logger.warning(f"Could not incorporate given PR time for {racer_name}: {e}")
+        return pd.DataFrame()
+
+
+def _build_p10_prediction_rows(
+    con,
+    road_time_coeffs,
+    racer_id,
+    racer_name: str,
+    po10_url: str | None,
+    prediction_year: int,
+) -> pd.DataFrame:
+    """Create prepared prediction rows from Power of 10 URL."""
+    if road_time_coeffs is None:
+        return pd.DataFrame()
+    if not (po10_url is not None and pd.notna(po10_url) and isinstance(po10_url, str) and po10_url.strip()):
+        return pd.DataFrame()
+
+    try:
+        p10_results = get_racer_p10_results_for_prediction(
+            racer_id=racer_id,
+            racer_name=racer_name,
+            athlete_url=po10_url,
+            prediction_year=prediction_year,
+        )
+        if p10_results is None or p10_results.empty:
+            return pd.DataFrame()
+
+        p10_results = p10_results[p10_results['Season'] < prediction_year].reset_index(drop=True)
+        if p10_results.empty:
+            return pd.DataFrame()
+
+        return prepare_p10_results_for_prediction(
+            p10_results,
+            racer_name=racer_name,
+            con=con,
+            time_coeffs=road_time_coeffs,
+        )
+    except Exception as e:
+        logger.warning(f"Could not use P10 results for {racer_name}: {e}")
+        return pd.DataFrame()
 
 def process_results_for_racer(
     con: Connection,
@@ -231,6 +307,7 @@ def process_results_for_racer(
     racer_id=None,
     prediction_year: int = None,
     po10_url: str | None = None,
+    given_pr_time: str | None = None,
 ) -> pd.DataFrame:
     """
     Process results for a single racer to separate them into results to use in prediction and excluded results.
@@ -253,15 +330,49 @@ def process_results_for_racer(
     """
     assert (racer_id is not None) ^ (racer_name is not None), "Provide either racer_id or racer_name, not both."
     if racer_name:
-        racer_id, racer_name = secure_racer_id(con, racer_name.lower().strip())
+        input_racer_name = racer_name
+        racer_id, resolved_name = secure_racer_id(con, racer_name.lower().strip())
+        racer_name = resolved_name if racer_id is not None else input_racer_name
+    else:
+        racer_name = con.execute("SELECT Racer_Name FROM Racers WHERE Racer_ID = ?", (int(racer_id),)).fetchone()[0]
     if racer_id is None:
-        logger.warning(f"Racer {racer_name} not found in database.")
-        return pd.DataFrame(), pd.DataFrame()
+        logger.warning(f"Racer {racer_name} not found in database. Building inferred results from submitted PR/P10 data.")
+        inferred_results = pd.concat([
+            _build_given_pr_prediction_row(
+                con=con,
+                coeffs=coeffs,
+                covar=covar,
+                resid_stds=resid_stds,
+                given_pr_time=given_pr_time,
+                racer_id=-1,
+                racer_name=racer_name,
+                prediction_year=prediction_year,
+            ),
+            _build_p10_prediction_rows(
+                con=con,
+                road_time_coeffs=load_road_time_models(),
+                racer_id=-1,
+                racer_name=racer_name,
+                po10_url=po10_url,
+                prediction_year=prediction_year if prediction_year is not None else date.today().year,
+            ),
+        ], ignore_index=True)
+        if inferred_results.empty:
+            return pd.DataFrame(), pd.DataFrame()
+        inferred_results['outlier'] = identify_outliers_in_predictions(inferred_results['Zpred_mu'], threshold=1.2)
+        filter_race_results(inferred_results)
+        return inferred_results, pd.DataFrame(columns=['Time', 'Season'])
     time_coeffs = load_time_models()
+    road_time_coeffs = load_road_time_models()
     chase_results = get_previous_chase_results(con, racer_id)
     racer_results = get_racers_results(con, racer_id)
-    if po10_url is not None:
-        p10_results = get_racer_p10_results_for_prediction(racer_id, racer_name, po10_url, prediction_year=prediction_year)
+    p10_results = None
+    if po10_url is not None and pd.notna(po10_url) and isinstance(po10_url, str) and po10_url.strip():
+        try:
+            p10_results = get_racer_p10_results_for_prediction(racer_id, racer_name, po10_url, prediction_year=prediction_year)
+        except Exception as e:
+            logger.warning(f"Failed to fetch Power of 10 results for {racer_name} from {po10_url}: {e}")
+            p10_results = None
     else:
         p10_results = None
 
@@ -303,13 +414,29 @@ def process_results_for_racer(
         )
         
     if p10_results is not None and not p10_results.empty:
-        all_results = combine_results_with_p10_results(
-            all_results,
-            p10_results,
-            con=con,
-            time_coeffs=time_coeffs,
-        )
-        
+        if road_time_coeffs is None:
+            logger.warning("Road time coefficients unavailable; skipping Power of 10 results.")
+        else:
+            all_results = combine_results_with_p10_results(
+                all_results,
+                p10_results,
+                con=con,
+                road_time_coeffs=road_time_coeffs,
+            )
+
+    given_pr_row = _build_given_pr_prediction_row(
+        con=con,
+        coeffs=coeffs,
+        covar=covar,
+        resid_stds=resid_stds,
+        given_pr_time=given_pr_time,
+        racer_id=racer_id,
+        racer_name=racer_name,
+        prediction_year=prediction_year,
+    )
+    if not given_pr_row.empty:
+        all_results = pd.concat([all_results, given_pr_row], ignore_index=True)
+
     all_results['outlier'] = identify_outliers_in_predictions(all_results['Zpred_mu'], threshold=1.2)
     filter_race_results(all_results)
 
@@ -326,28 +453,19 @@ def gather_results_for_entries(entries: pd.DataFrame, con: Connection, year_of_e
         
         if with_parkrun:
             PR_time = entry.get('PR_time', None)
-            if pd.notna(PR_time) and isinstance(PR_time, str) and ':' in PR_time:
-                pr_mean, pr_sig, pr_zscore = get_prediction_from_parkrun_time(
-                    con,
-                    PR_time,
-                    coeffs['PR_Endcliffe'],
-                    covar['PR_Endcliffe'],
-                    residual_std=float(resid_stds.get('PR_Endcliffe', 0.0)),
-                )
-            else:
-                pr_mean = pr_sig = pr_zscore = None
+        else:
+            PR_time = None
 
         racer_id, racer_name = secure_racer_id(con, racer_name.lower().strip())
-        racer_given_PR = pd.DataFrame(
-            {
-                'Racer_ID': racer_id,
-                'Racer_Name': racer_name,
-                'Race_Name': 'PR_given',
-                'Season': year_of_entry-1, # This is the last completed season compared to given Chase year
-                'ZScore': pr_zscore,
-                'Zpred_mu': pr_mean,
-                'Zpred_sig': pr_sig
-            }
+        racer_given_PR = _build_given_pr_prediction_row(
+            con=con,
+            coeffs=coeffs,
+            covar=covar,
+            resid_stds=resid_stds,
+            given_pr_time=PR_time if (pd.notna(PR_time) and isinstance(PR_time, str) and ':' in PR_time) else None,
+            racer_id=racer_id,
+            racer_name=racer_name,
+            prediction_year=year_of_entry,
         )
         if racer_id is None:
             # Just put name in dataframe with given parkrun time if they have one.
@@ -382,18 +500,22 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
         pd.DataFrame: Processed DataFrame with necessary columns.
     """
     coeffs, covar, resid_stds = load_models(include_residuals=True)
+    road_time_coeffs = load_road_time_models()
     processed_entries = pd.DataFrame()
     all_racer_results = pd.DataFrame()
     all_racer_predictions = pd.DataFrame()
     this_year = year_of_entry
     for i, entry in entries.iterrows():
         racer_name = entry['Name']
+        input_racer_name = racer_name
         logger.info(f"Processing entry for {racer_name}")
         
         pr_prediction_str = "N/A"
+        pr_time_for_model = None
         if with_parkrun:
             PR_time = entry.get('PR_time', None)
             if pd.notna(PR_time) and isinstance(PR_time, str) and ':' in PR_time:
+                pr_time_for_model = PR_time
                 pr_prediction_t = get_prediction_time_from_parkrun_time(
                     con,
                     PR_time,
@@ -405,12 +527,40 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
                 logger.info(f"PR time for {racer_name}: {seconds_to_time_string(pr_prediction_t)}")
                 pr_prediction_str = seconds_to_time_string(pr_prediction_t)
         
-        racer_id, racer_name = secure_racer_id(con, racer_name.lower().strip())        
+        racer_id, racer_name = secure_racer_id(con, racer_name.lower().strip())
         if racer_id is None:
-            logger.warning(f"Racer {racer_name} not found in database.")
-            racer_results = None
-            excluded_results = None
-            chase_results = None
+            logger.warning(f"Racer {input_racer_name} not found in database. Building prediction from submitted PR/P10 data.")
+            racer_name = input_racer_name
+            chase_results = pd.DataFrame(columns=['Time', 'Season'])
+
+            inferred_results = pd.DataFrame(columns=['Racer_ID', 'Racer_Name', 'Race_Name', 'Season', 'ZScore', 'Zpred_mu', 'Zpred_sig'])
+
+            inferred_results = pd.concat([
+                inferred_results,
+                _build_given_pr_prediction_row(
+                    con=con,
+                    coeffs=coeffs,
+                    covar=covar,
+                    resid_stds=resid_stds,
+                    given_pr_time=pr_time_for_model,
+                    racer_id=-1 * (i + 1),
+                    racer_name=racer_name,
+                    prediction_year=year_of_entry,
+                ),
+                _build_p10_prediction_rows(
+                    con=con,
+                    road_time_coeffs=road_time_coeffs,
+                    racer_id=-1 * (i + 1),
+                    racer_name=racer_name,
+                    po10_url=entry.get('URL', None),
+                    prediction_year=year_of_entry,
+                ),
+            ], ignore_index=True)
+
+            racer_results = inferred_results
+            if not racer_results.empty:
+                racer_results['outlier'] = identify_outliers_in_predictions(racer_results['Zpred_mu'], threshold=1.2)
+                filter_race_results(racer_results)
         else:
 
             racer_results, chase_results = process_results_for_racer(
@@ -420,10 +570,11 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
                 resid_stds=resid_stds,
                 racer_id=racer_id,
                 prediction_year=year_of_entry,
-                po10_url=entry.get('URL', None)
+                po10_url=entry.get('URL', None),
+                given_pr_time=pr_time_for_model,
             )
-        if racer_results is None:
-            logger.warning(f"Creating blank entry for {racer_name} as racer not found.")
+        if racer_results is None or racer_results.empty:
+            logger.warning(f"Creating blank entry for {racer_name}; no usable results found.")
             entry_series = pd.Series({
             'Name': racer_name,
             'Num_results_used': 0,
@@ -448,7 +599,11 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
             prediction_str = 'N/A'
         else:
             # Subtracting 1 from the year of entry as year before race is most recent possible
-            chase_mu, chase_sig = make_chase_prediction(racer_results.loc[racer_results['include']], prediction_year = year_of_entry,  verbose=True)   
+            chase_mu, chase_sig = make_chase_prediction(
+                racer_results.loc[racer_results['include']],
+                prediction_year=year_of_entry,
+                verbose=False,
+            )
             prediction = chase_mu - (1.96 * chase_sig)
             prediction_t = convert_Chase_ZScore_logs_avg(con, prediction)[0]
             prediction_str = seconds_to_time_string(prediction_t)
@@ -467,7 +622,7 @@ def process_entries(entries: pd.DataFrame, con: Connection,year_of_entry: int, w
             )
 
             if plot:
-                plot_racer_entry(con, racer_results, excluded_results,chase_mu, chase_sig, prediction_t, racer_name, prediction_year=this_year)
+                plot_racer_entry(con, racer_results, None, chase_mu, chase_sig, prediction_t, racer_name, prediction_year=this_year)
 
         # Create a series for this racer's entry
         # Add last three years of chase results too

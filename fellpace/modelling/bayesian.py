@@ -40,6 +40,13 @@ def calculate_recency_weights(year_to_predict: int, season: np.ndarray, initial_
         lambda_decay (float): The decay rate for the exponential function.
         
     """
+    # Guard against object-dtype arrays coming from mixed pandas frames.
+    season = pd.to_numeric(pd.Series(season), errors='coerce').to_numpy(dtype=float)
+    initial_weights = pd.to_numeric(pd.Series(initial_weights), errors='coerce').fillna(0.0).to_numpy(dtype=float)
+
+    if np.isnan(season).any():
+        raise ValueError("Season values must be numeric for recency weighting.")
+
     if (season >= year_to_predict).any():
         logger.critical(f"Cannot adjust weights for seasons ahead of the prediction year.")
         raise ValueError("All seasons must be before the prediction year.")

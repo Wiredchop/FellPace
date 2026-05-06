@@ -24,10 +24,14 @@ def filter_race_results(racer_results: pd.DataFrame) -> None:
     else:
         exclude_mask = pd.Series([True] * len(racer_results), index=racer_results.index)
     
-    parkrun_mask = ~racer_results['Race_Name'].str.contains('PR_')    
+    parkrun_mask = ~racer_results['Race_Name'].str.contains('PR_')
+    given_pr_rows = racer_results['Race_Name'] == 'PR_given'
     if parkrun_mask.sum() < 3:
         # Only include if enough other races
         parkrun_mask = pd.Series([True] * len(racer_results), index=racer_results.index)
+    else:
+        # Always retain the explicitly given PR regardless of how many fell races exist
+        parkrun_mask = parkrun_mask | given_pr_rows
         
     if racer_results.columns.str.contains('outlier').any():
         outlier_mask = ~racer_results['outlier']

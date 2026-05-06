@@ -309,11 +309,11 @@ def entries(
         unique_racers = processed_entries['Name'].unique()
         
         for racer_name in unique_racers:
-            racer_id = secure_racer_id(con, racer_name)
+            racer_id, resolved_name = secure_racer_id(con, racer_name)
             if racer_id is None:
                 logger.warning(f"Racer {racer_name} not found in database, skipping.")
                 continue
-            generate_racer_plot(con, model_tuple, racer_id, racer_name, year, output_dir)
+            generate_racer_plot(con, model_tuple, racer_id, resolved_name, year, output_dir)
         
         logger.info(f"Finished generating plots. Saved to {output_dir}")
 

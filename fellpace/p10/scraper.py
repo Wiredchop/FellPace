@@ -33,9 +33,9 @@ def _centiseconds_to_time(centiseconds: int) -> str:
 def _distance_for_event(event_name: str) -> str | None:
     event_lower = event_name.lower()
     if "parkrun" in event_lower or "5k" in event_lower or "5000" in event_lower or "5 k" in event_lower:
-        return "5km"
+        return "p10_5k"
     if "10k" in event_lower or "10000" in event_lower or "10 k" in event_lower:
-        return "10km"
+        return "p10_10k"
     return None
 
 
@@ -160,7 +160,7 @@ def scrape_athlete_yearly_best(
 
             event_name = event_match.group(1)
             distance = _distance_for_event(event_name)
-            if distance not in {"5km", "10km"}:
+            if distance not in {"p10_5k", "p10_10k"}:
                 continue
 
             values_match = re.search(f"var dataRpValues{idx} = \\[([\\d,\\s]+)\\]", script_text)
