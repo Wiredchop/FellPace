@@ -270,6 +270,21 @@
     "Off_time":"19:54:05"
   },
   {
+    "Name":"ollie peacock",
+    "Num_results_used":1,
+    "Num_excluded_results":0,
+    "Predicted_Time":"00:26:03",
+    "Given PR prediction":"00:28:03",
+    "Predicted_Time_seconds":1563.3986436506,
+    "Chase 2025":"N\/A",
+    "Chase 2024":"N\/A",
+    "Chase 2023":"N\/A",
+    "Handicap_seconds_raw":1414.1990619327,
+    "Handicap_seconds":1415,
+    "Handicap":"00:23:35",
+    "Off_time":"19:53:35"
+  },
+  {
     "Name":"tom hughes s",
     "Num_results_used":3,
     "Num_excluded_results":1,
@@ -345,21 +360,6 @@
     "Off_time":"19:53:10"
   },
   {
-    "Name":"Dalton Barham-Colwell",
-    "Num_results_used":1,
-    "Num_excluded_results":0,
-    "Predicted_Time":"00:26:36",
-    "Given PR prediction":"N\/A",
-    "Predicted_Time_seconds":1595.9023553104,
-    "Chase 2025":"N\/A",
-    "Chase 2024":"N\/A",
-    "Chase 2023":"N\/A",
-    "Handicap_seconds_raw":1381.6953502729,
-    "Handicap_seconds":1385,
-    "Handicap":"00:23:05",
-    "Off_time":"19:53:05"
-  },
-  {
     "Name":"helen roberts",
     "Num_results_used":11,
     "Num_excluded_results":3,
@@ -400,6 +400,21 @@
     "Chase 2024":"N\/A",
     "Chase 2023":"00:29:13",
     "Handicap_seconds_raw":1375.3146553155,
+    "Handicap_seconds":1380,
+    "Handicap":"00:23:00",
+    "Off_time":"19:53:00"
+  },
+  {
+    "Name":"Dalton Barham-Colwell",
+    "Num_results_used":2,
+    "Num_excluded_results":0,
+    "Predicted_Time":"00:26:42",
+    "Given PR prediction":"00:26:24",
+    "Predicted_Time_seconds":1602.4856947244,
+    "Chase 2025":"N\/A",
+    "Chase 2024":"N\/A",
+    "Chase 2023":"N\/A",
+    "Handicap_seconds_raw":1375.1120108589,
     "Handicap_seconds":1380,
     "Handicap":"00:23:00",
     "Off_time":"19:53:00"
@@ -493,21 +508,6 @@
     "Handicap_seconds":1335,
     "Handicap":"00:22:15",
     "Off_time":"19:52:15"
-  },
-  {
-    "Name":"charles benkowitz",
-    "Num_results_used":6,
-    "Num_excluded_results":8,
-    "Predicted_Time":"00:27:28",
-    "Given PR prediction":"00:25:50",
-    "Predicted_Time_seconds":1647.6380134278,
-    "Chase 2025":"00:31:03",
-    "Chase 2024":"N\/A",
-    "Chase 2023":"N\/A",
-    "Handicap_seconds_raw":1329.9596921555,
-    "Handicap_seconds":1330,
-    "Handicap":"00:22:10",
-    "Off_time":"19:52:10"
   },
   {
     "Name":"richard johnson",
@@ -1380,21 +1380,6 @@
     "Off_time":"19:43:40"
   },
   {
-    "Name":"ollie peacock",
-    "Num_results_used":1,
-    "Num_excluded_results":0,
-    "Predicted_Time":"00:36:12",
-    "Given PR prediction":"00:39:27",
-    "Predicted_Time_seconds":2172.0457150453,
-    "Chase 2025":"N\/A",
-    "Chase 2024":"N\/A",
-    "Chase 2023":"N\/A",
-    "Handicap_seconds_raw":805.5519905379,
-    "Handicap_seconds":810,
-    "Handicap":"00:13:30",
-    "Off_time":"19:43:30"
-  },
-  {
     "Name":"bernadette edge",
     "Num_results_used":13,
     "Num_excluded_results":6,
@@ -1498,6 +1483,21 @@
     "Handicap_seconds":480,
     "Handicap":"00:08:00",
     "Off_time":"19:38:00"
+  },
+  {
+    "Name":"jane cockerton",
+    "Num_results_used":11,
+    "Num_excluded_results":9,
+    "Predicted_Time":"00:42:08",
+    "Given PR prediction":"00:36:14",
+    "Predicted_Time_seconds":2528.0416307966,
+    "Chase 2025":"00:45:16",
+    "Chase 2024":"00:46:40",
+    "Chase 2023":"00:47:02",
+    "Handicap_seconds_raw":449.5560747867,
+    "Handicap_seconds":450,
+    "Handicap":"00:07:30",
+    "Off_time":"19:37:30"
   },
   {
     "Name":"derek brailsford",
