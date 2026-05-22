@@ -7,14 +7,14 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from fellpace.config import DB_PATH
+from fellpace.config import DB_DIR, DB_PATH
 from fellpace.db.db_setup import setup_db
 from fellpace.convert_tools import seconds_to_time_string
 from fellpace.extract.racers import find_racer_ID, find_similar_name
 
 
-PO10_CSV = Path("DB/po10_best_times.csv")
-OUTPUT_CSV = Path("DB/po10_chase_combined.csv")
+PO10_CSV = DB_DIR / "po10_best_times.csv"
+OUTPUT_CSV = DB_DIR / "po10_chase_combined.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +107,9 @@ def build_combined_dataset(
     Returns:
         pd.DataFrame: Combined dataset, also saved to output_csv.
     """
+    po10_csv = Path(po10_csv)
+    output_csv = Path(output_csv)
+
     po10 = pd.read_csv(po10_csv)
     po10["year"] = pd.to_numeric(po10["year"], errors="coerce")
     po10 = po10.dropna(subset=["year", "best_time_seconds"])
@@ -147,10 +150,11 @@ def build_combined_dataset(
         .reset_index()
     )
     road_wide.columns.name = None
-    if "5km" in road_wide.columns:
-        road_wide = road_wide.rename(columns={"5km": "5km_best_seconds"})
-    if "10km" in road_wide.columns:
-        road_wide = road_wide.rename(columns={"10km": "10km_best_seconds"})
+    rename_map = {
+        "p10_5k": "5km_best_seconds",
+        "p10_10k": "10km_best_seconds",
+    }
+    road_wide = road_wide.rename(columns=rename_map)
 
     # --- merge chase results with road times ---
     combined = chase_df[["racer", "year", "chase_time_seconds"]].merge(
@@ -179,6 +183,7 @@ def build_combined_dataset(
         + (["10km_best_seconds", "10km_best_time"] if "10km_best_seconds" in combined.columns else [])
     )
     combined = combined[[c for c in col_order if c in combined.columns]]
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
     combined.to_csv(output_csv, index=False, encoding="utf-8")
 
     logger.info(f"Saved combined dataset: {output_csv}")
@@ -209,7 +214,26 @@ def extract_road_chase_training_data(input_csv: Path = OUTPUT_CSV) -> pd.DataFra
             PrevTime   — road best time in seconds
             HCTime     — Chase finishing time in seconds
     """
-    combined = pd.read_csv(input_csv)
+    input_csv = Path(input_csv)
+
+    if not input_csv.exists():
+        logger.warning(f"Road/chase combined CSV missing at {input_csv}. Attempting to build it now.")
+        try:
+            combined_built = build_combined_dataset(output_csv=input_csv)
+        except FileNotFoundError as exc:
+            logger.warning(
+                f"Could not build road/chase dataset because a source file is missing: {exc}. "
+                "Skipping road time models."
+            )
+            return pd.DataFrame(columns=["Race_Name", "PrevTime", "HCTime"])
+
+        if combined_built.empty:
+            logger.warning("Built road/chase dataset is empty. Skipping road time models.")
+            return pd.DataFrame(columns=["Race_Name", "PrevTime", "HCTime"])
+
+        combined = combined_built
+    else:
+        combined = pd.read_csv(input_csv)
 
     frames = []
     for dist, col in [("p10_5k", "5km_best_seconds"), ("p10_10k", "10km_best_seconds")]:
@@ -239,8 +263,17 @@ def main() -> None:
     print("\nSample:")
     print(combined.head(10).to_string(index=False))
 
-    missing_road = combined[combined.get("5km_best_seconds", pd.Series(dtype=float)).isna()
-                            & combined.get("10km_best_seconds", pd.Series(dtype=float)).isna()]
+    mask_5k_missing = (
+        combined["5km_best_seconds"].isna()
+        if "5km_best_seconds" in combined.columns
+        else pd.Series(True, index=combined.index)
+    )
+    mask_10k_missing = (
+        combined["10km_best_seconds"].isna()
+        if "10km_best_seconds" in combined.columns
+        else pd.Series(True, index=combined.index)
+    )
+    missing_road = combined[mask_5k_missing & mask_10k_missing]
     if len(missing_road) > 0:
         print(f"\nWarning: {len(missing_road)} chase rows have no road time for that year "
               f"(road data exists from 2016+).")

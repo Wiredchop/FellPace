@@ -7,11 +7,17 @@ import re
 
 import pandas as pd
 
-from .scraper import scrape_athlete_yearly_best
+from fellpace.config import DB_DIR
+
+try:
+    from .scraper import scrape_athlete_yearly_best
+except ImportError:
+    # Allows running this file directly as a script.
+    from scraper import scrape_athlete_yearly_best
 
 
-INPUT_CSV = Path("DB/po10.csv")
-OUTPUT_CSV = Path("DB/po10_best_times.csv")
+INPUT_CSV = DB_DIR / "po10.csv"
+OUTPUT_CSV = DB_DIR / "po10_best_times.csv"
 
 
 def _extract_athlete_url(url: str) -> str | None:

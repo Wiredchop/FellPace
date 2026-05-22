@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.1"
+__generated_with = "0.23.5"
 app = marimo.App(width="medium")
 
 
@@ -83,7 +83,12 @@ def _(date, mo):
     recalculate_button = mo.ui.run_button(label="Re-calculate from DB")
     export_handicaps_button = mo.ui.run_button(label="Export handicaps CSV")
     mo.hstack([year_selector, use_parkrun, recalculate_button, export_handicaps_button], widths=[1, 1, 1, 1])
-    return export_handicaps_button, recalculate_button, use_parkrun, year_selector
+    return (
+        export_handicaps_button,
+        recalculate_button,
+        use_parkrun,
+        year_selector,
+    )
 
 
 @app.cell
@@ -105,6 +110,7 @@ def _(
     process_PR_entries,
     process_entries,
     recalculate_button,
+    secure_racer_id,
     use_parkrun,
 ):
     try:
@@ -128,10 +134,17 @@ def _(
         entry_url_map = {}
         entry_pr_time_map = {}
         if "Name" in source_entries.columns:
+            def canonicalize_entry_name(name: str) -> str:
+                racer_id, resolved_name = secure_racer_id(con, name)
+                if racer_id is not None and isinstance(resolved_name, str):
+                    return resolved_name.lower().strip()
+                return name
+
             normalized_entries = (
                 source_entries
                 .dropna(subset=["Name"])
                 .assign(Name=lambda df: df["Name"].str.lower().str.strip())
+                .assign(Name=lambda df: df["Name"].map(canonicalize_entry_name))
                 .drop_duplicates(subset=["Name"], keep="first")
             )
             if "URL" in normalized_entries.columns:
@@ -217,8 +230,8 @@ def _(
         _overrides = load_prediction_time_overrides()
         summary = processed_entries.copy()
         applied = 0
-        for idx, row in summary.iterrows():
-            _summary_name_key = str(row["Name"]).lower().strip()
+        for idx, summary_row in summary.iterrows():
+            _summary_name_key = str(summary_row["Name"]).lower().strip()
             _override_key = f"{_summary_name_key}|{int(prediction_year)}"
             if _override_key in _overrides:
                 _override_seconds = float(_overrides[_override_key])
@@ -280,7 +293,13 @@ def _(
 
 
 @app.cell
-def _(ENTRIES_PATH, comparison_table, export_handicaps_button, mo, prediction_year):
+def _(
+    ENTRIES_PATH,
+    comparison_table,
+    export_handicaps_button,
+    mo,
+    prediction_year,
+):
     export_status_md = mo.md("")
 
     if bool(export_handicaps_button.value):
@@ -300,7 +319,6 @@ def _(ENTRIES_PATH, comparison_table, export_handicaps_button, mo, prediction_ye
             export_path = ENTRIES_PATH / f"handicaps_{int(prediction_year)}.csv"
             export_df.to_csv(export_path, index=False)
             export_status_md = mo.md(f"Exported handicap summary to {export_path}.")
-
     return (export_status_md,)
 
 
@@ -449,8 +467,9 @@ def _(
         racer_id, canonical_name = secure_racer_id(con, selected_row["Name"].lower().strip())
         display_name = canonical_name if canonical_name is not None else str(selected_row["Name"])
         coeffs, covar, resid_stds = load_models(include_residuals=True)
-        po10_url = entry_url_map.get(selected_row["Name"].lower().strip())
-        given_pr_time = entry_pr_time_map.get(selected_row["Name"].lower().strip())
+        selected_name_key = selected_row["Name"].lower().strip()
+        po10_url = entry_url_map.get(selected_name_key)
+        given_pr_time = entry_pr_time_map.get(selected_name_key)
 
         process_kwargs = {
             "con": con,
@@ -587,7 +606,6 @@ def _(load_prediction_time_overrides, mo, prediction_year, selected_row):
         )
         ovr_set_btn = mo.ui.run_button(label="Set override")
         ovr_clear_btn = mo.ui.run_button(label="Reinstate model")
-
     return ovr_clear_btn, ovr_key, ovr_name, ovr_set_btn, ovr_time_input
 
 
@@ -644,7 +662,14 @@ def _(
 
 
 @app.cell
-def _(mo, ovr_clear_btn, ovr_set_btn, ovr_status_md, ovr_time_input, selected_row):
+def _(
+    mo,
+    ovr_clear_btn,
+    ovr_set_btn,
+    ovr_status_md,
+    ovr_time_input,
+    selected_row,
+):
     override_panel = None
     if selected_row is not None:
         override_panel = mo.vstack(
@@ -659,6 +684,7 @@ def _(mo, ovr_clear_btn, ovr_set_btn, ovr_status_md, ovr_time_input, selected_ro
 
 @app.cell
 def _(
+    bulk_cutoff_panel,
     figure,
     include_checkboxes,
     mo,
@@ -687,6 +713,7 @@ def _(
                     "Toggle checkboxes to include/exclude each race. Changes are saved "
                     "immediately and this racer is recalculated automatically."
                 ),
+                bulk_cutoff_panel,
                 include_checkboxes,
             ])
     mo.vstack(outputs)
@@ -711,10 +738,10 @@ def _(mo, racer_detail_table):
         include_checkboxes = mo.ui.array(
             [
                 mo.ui.checkbox(
-                    value=bool(row["include"]),
-                    label=f"{row['Race_Name']} ({int(row['Season'])})",
+                    value=bool(detail_row["include"]),
+                    label=f"{detail_row['Race_Name']} ({int(detail_row['Season'])})",
                 )
-                for _, row in racer_detail_table.iterrows()
+                for _, detail_row in racer_detail_table.iterrows()
             ],
             label="Manual include / exclude",
         )
@@ -722,6 +749,95 @@ def _(mo, racer_detail_table):
         include_checkboxes = None
         racer_detail_display_table = None
     return include_checkboxes, racer_detail_display_table
+
+
+@app.cell
+def _(mo, racer_detail_table, selected_row):
+    bulk_cutoff_button_ui = None
+    bulk_cutoff_input_ui = None
+
+    if selected_row is not None and racer_detail_table is not None and not racer_detail_table.empty:
+        bulk_cutoff_input_ui = mo.ui.text(
+            value="",
+            label="Remove races before (exclusive year)",
+            placeholder="e.g. 2023",
+        )
+        bulk_cutoff_button_ui = mo.ui.run_button(
+            label="Remove races before (exclusive)"
+        )
+    return bulk_cutoff_button_ui, bulk_cutoff_input_ui
+
+
+@app.cell
+def _(
+    bulk_cutoff_button_ui,
+    bulk_cutoff_input_ui,
+    mo,
+    racer_detail_table,
+    racer_id,
+    racer_refresh_count,
+    re,
+    set_race_override,
+    set_racer_refresh_count,
+):
+    bulk_cutoff_status_md = mo.md("")
+
+    if (
+        bulk_cutoff_button_ui is not None
+        and bulk_cutoff_input_ui is not None
+        and racer_detail_table is not None
+        and racer_id is not None
+        and bool(bulk_cutoff_button_ui.value)
+    ):
+        raw_cutoff = (bulk_cutoff_input_ui.value or "").strip()
+        if not re.fullmatch(r"\d{4}", raw_cutoff):
+            bulk_cutoff_status_md = mo.md("Enter a four-digit year, for example 2023.")
+        else:
+            cutoff_year = int(raw_cutoff)
+            matching_rows = racer_detail_table[racer_detail_table["Season"] < cutoff_year]
+            for _, matching_row in matching_rows.iterrows():
+                set_race_override(
+                    racer_id,
+                    int(matching_row["Season"]),
+                    matching_row["Race_Name"],
+                    False,
+                )
+            set_racer_refresh_count(racer_refresh_count() + 1)
+            bulk_cutoff_status_md = mo.md(
+                f"Excluded {len(matching_rows)} races before {cutoff_year} for this racer."
+            )
+    return (bulk_cutoff_status_md,)
+
+
+@app.cell
+def _(
+    bulk_cutoff_button_ui,
+    bulk_cutoff_input_ui,
+    bulk_cutoff_status_md,
+    mo,
+    racer_detail_table,
+    selected_row,
+):
+    bulk_cutoff_panel = None
+
+    if (
+        selected_row is not None
+        and racer_detail_table is not None
+        and not racer_detail_table.empty
+        and bulk_cutoff_input_ui is not None
+        and bulk_cutoff_button_ui is not None
+    ):
+        bulk_cutoff_panel = mo.vstack(
+            [
+                mo.md(
+                    "Bulk action: enter a cutoff year to exclude all races before that year. "
+                    "For example, 2023 removes seasons up to and including 2022."
+                ),
+                mo.hstack([bulk_cutoff_input_ui, bulk_cutoff_button_ui], widths=[2, 1]),
+                bulk_cutoff_status_md,
+            ]
+        )
+    return (bulk_cutoff_panel,)
 
 
 @app.cell

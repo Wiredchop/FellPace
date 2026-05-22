@@ -92,6 +92,7 @@ def get_racers_results(con, racer_ID, season: int = -1) -> pd.DataFrame:
         SELECT CASE
         WHEN Race_Name LIKE "Parkrun_endcliffe%" THEN "PR_Endcliffe"
         WHEN Race_Name LIKE "Parkrun_hillsborough%" THEN "PR_Hillsborough"
+        WHEN Race_Name LIKE "Tigers Trail%" THEN "Tiger's Trail"
         ELSE Race_Name
         END  AS Race_Name,
         CASE

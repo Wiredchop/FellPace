@@ -76,6 +76,8 @@ def process_html(url: str,):
     add_data(data)
     
 def add_data(data):
+    # Strip whitespace from all string columns at ingestion point
+    data = data.map(lambda x: x.strip() if isinstance(x, str) else x)
     (metadata,entries) = process_data_for_DB(data)
     #Clean any null entries for time, which can't be converted to a Zscore
     valid_data = entries.data.loc[~entries.data.Time.isnull()]

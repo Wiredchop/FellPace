@@ -404,9 +404,17 @@ def check_db_for_duplicate_racers(data_to_insert: pd.DataFrame, Racers: pd.DataF
     # The query looks for items that came from the left table only in the '_merge' column that is a result of indicator
     # Finally we drop this column as it's no longer needed
     # Only need Racer_Name from imported table
-    Racers_new = data_to_insert.merge(Racers[['Racer_Name']],on="Racer_Name", how='left', indicator=True)\
+    # Normalize case for comparison to handle case sensitivity issues
+    data_to_compare = data_to_insert.copy()
+    data_to_compare['Racer_Name_lower'] = data_to_compare['Racer_Name'].str.lower()
+    
+    racers_to_compare = Racers[['Racer_Name']].copy()
+    racers_to_compare['Racer_Name_lower'] = racers_to_compare['Racer_Name'].str.lower()
+    
+    Racers_new = data_to_compare.merge(racers_to_compare[['Racer_Name_lower']], on="Racer_Name_lower", how='left', indicator=True)\
         .query('_merge == "left_only"')\
-        .drop('_merge',axis = 1)
+        .drop('_merge', axis=1)\
+        .drop('Racer_Name_lower', axis=1)
 
     #Keep only the columns we need to add to the database
     Racers_new = Racers_new[['Racer_Name', 'Club']]
